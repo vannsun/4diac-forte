@@ -30,6 +30,7 @@
 #include "forte/eventconn.h"
 #include "forte/util/devlog.h"
 #include "forte/stringid.h"
+#include "eetmonitor.h"
 
 #include <bitset>
 
@@ -234,6 +235,7 @@ namespace forte {
             // Count Event for monitoring
             mEventMonitorCount[paEIID]++;
           }
+          CEETMonitor::getInstance().startMeasurement(getInstanceNameId().data());
           executeEvent(paEIID, paExecEnv);
           if (mForces.any()) [[unlikely]] {
             resetForcedOutputs();
@@ -405,8 +407,10 @@ namespace forte {
        * \param paExecEnv Event chain execution environment where the event will be sent to.
        */
       void sendOutputEvent(TEventID paEO, CEventChainExecutionThread *const paECET) {
-        FORTE_TRACE("OutputEvent: Function Block sending event: %d (maxid: %d)\n", paEO,
-                    getFBInterfaceSpec().getNumEOs() - 1);
+        //FORTE_TRACE("OutputEvent: Function Block sending event: %d (maxid: %d)\n", paEO,
+        //            getFBInterfaceSpec().getNumEOs() - 1);
+        FORTE_TRACE("OutputEvent: Function Block (%s) sending event: %d (maxid: %d)\n", getInstanceNameId().data(), paEO,
+                    getFBInterfaceSpec().getNumEIs() - 1);
 
 #ifdef FORTE_TRACE_CTF
         traceOutputEvent(paEO, paECET);
@@ -416,6 +420,7 @@ namespace forte {
           writeOutputData(paEO);
           getEOConUnchecked(static_cast<TPortId>(paEO))->triggerEvent(paECET);
 
+          CEETMonitor::getInstance().endMeasurement(getInstanceNameId().data());
           // Count Event for monitoring, use size and number of EOs for performance reason so that only one value has to
           // be gathered from the interface spec
           mEventMonitorCount[mEventMonitorCount.size() - numEOs + paEO]++;

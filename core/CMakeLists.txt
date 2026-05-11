@@ -13,6 +13,12 @@
 #############################################################################
 
 add_library(forte-core)
+
+option(FORTE_TRACE_EVENTS "FORTE will log the events received at and sent from function blocks" OFF)
+if(FORTE_TRACE_EVENTS)
+  target_compile_definitions(forte-core PUBLIC FORTE_TRACE_EVENTS)
+endif()
+
 target_compile_features(forte-core PUBLIC cxx_std_20)
 target_link_libraries(forte PUBLIC $<IF:$<BOOL:${BUILD_SHARED_LIBS}>,forte-core,$<LINK_LIBRARY:WHOLE_ARCHIVE,forte-core>>)
 
