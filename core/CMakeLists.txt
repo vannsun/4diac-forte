@@ -19,6 +19,17 @@ if(FORTE_TRACE_EVENTS)
   target_compile_definitions(forte-core PUBLIC FORTE_TRACE_EVENTS)
 endif()
 
+option(FORTE_EET_MONITORING "Enable EET execution time measurement" OFF)
+option(FORTE_FET_ENFORCEMENT "Enable FET deadline enforcement" OFF)
+
+if(FORTE_EET_MONITORING)
+  target_compile_definitions(forte-core PUBLIC FORTE_EET_MONITORING)
+endif()
+
+if(FORTE_FET_ENFORCEMENT)
+  target_compile_definitions(forte-core PUBLIC FORTE_FET_ENFORCEMENT)
+endif()
+
 target_compile_features(forte-core PUBLIC cxx_std_20)
 target_link_libraries(forte PUBLIC $<IF:$<BOOL:${BUILD_SHARED_LIBS}>,forte-core,$<LINK_LIBRARY:WHOLE_ARCHIVE,forte-core>>)
 

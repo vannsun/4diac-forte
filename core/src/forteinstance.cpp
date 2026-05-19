@@ -16,15 +16,40 @@
 #include "forte/forteinstance.h"
 #include "forte/devicefactory.h"
 
+#ifdef FORTE_EET_MONITORING
+// Called on Ctrl+C or VSCode stop (SIGTERM/SIGINT).
+// Exports whatever samples exist at that moment.
+static void onSignal(int) {
+  CEETMonitor::getInstance().stopPeriodicExport();
+  CEETMonitor::getInstance().exportAllCSV("eet_results");
+  std::exit(0);
+}
+#endif
+
 namespace forte {
   C4diacFORTEInstance::~C4diacFORTEInstance() {
     if (mActiveDevice) {
+      #ifdef FORTE_EET_MONITORING
+        CEETMonitor::getInstance().stopPeriodicExport();
+        CEETMonitor::getInstance().exportAllCSV("eet_results");
+      #endif
       mActiveDevice->deinitialize();
     }
   }
 
   bool C4diacFORTEInstance::startupNewDevice(const std::string &paMGRID) {
     if (mActiveDevice) {
+      #ifdef FORTE_EET_MONITORING
+        // Stop the periodic export thread before tearing down the current
+        // device. The export thread calls exportAllCSV which reads mDurations
+        // under its own lock — stopping it first avoids a race with clearAllData
+        // called during device teardown.
+        CEETMonitor::getInstance().stopPeriodicExport();
+  
+        // Flush whatever samples the last periodic export did not yet capture.
+        CEETMonitor::getInstance().exportAllCSV("eet_results");
+      #endif
+
       // we have a current active device stop it
       triggerDeviceShutdown();
       awaitDeviceShutdown();
@@ -34,6 +59,14 @@ namespace forte {
     if (mActiveDevice) {
       mActiveDevice->initialize();
       mActiveDevice->startDevice();
+
+      #ifdef FORTE_EET_MONITORING
+        // Start periodic CSV export after the device is running so there are
+        // FBs already producing measurements before the first export fires.
+        // Interval: 10 s — adjust as needed for the evaluation setup.
+        // paTargetSamples: defaults to 0 = run inde
+        CEETMonitor::getInstance().startPeriodicExport("eet_results", std::chrono::seconds(10), 1000);
+      #endif
     }
     return mActiveDevice.operator bool();
   }
