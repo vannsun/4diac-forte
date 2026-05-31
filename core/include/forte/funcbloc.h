@@ -421,11 +421,7 @@ namespace forte {
        * \param paEO Event output ID where event should be fired.
        * \param paExecEnv Event chain execution environment where the event will be sent to.
        */
-      void sendOutputEvent(TEventID paEO, CEventChainExecutionThread *const paECET) {
-        FORTE_TRACE("OutputEvent: Function Block (%s) sending event: %d (maxid: %d)\n",
-                    getInstanceNameId().data(), paEO,
-                    getFBInterfaceSpec().getNumEOs() - 1);
-      
+      void sendOutputEvent(TEventID paEO, CEventChainExecutionThread *const paECET) {     
       #ifdef FORTE_TRACE_CTF
         traceOutputEvent(paEO, paECET);
       #endif
@@ -441,6 +437,11 @@ namespace forte {
           // output data is ready, not after downstream FBs have been queued.
           CEETMonitor::getInstance().endMeasurement(getInstanceNameId().data());
       #endif
+
+      FORTE_TRACE("OutputEvent: Function Block (%s) sending event: %d (maxid: %d)\n",
+                    getInstanceNameId().data(), paEO,
+                    getFBInterfaceSpec().getNumEOs() - 1);
+
       #ifdef FORTE_FET_ENFORCEMENT
           const bool withinDeadline = CFETMonitor::getInstance().waitUntilDeadline(getInstanceNameId().data());
           // Enforcement Mechanism

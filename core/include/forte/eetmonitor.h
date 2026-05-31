@@ -68,11 +68,11 @@ public:
   /*! \brief Number of samples collected before activateFET() considers data stable. */
   //static constexpr size_t WARMUP_SAMPLES = 1000;
   // In eetmonitor.h:
-#ifdef NDEBUG
-  static constexpr size_t WARMUP_SAMPLES = 100;
-#else
-  static constexpr size_t WARMUP_SAMPLES = 10;   //10: fast activation in debug
-#endif
+//#ifdef NDEBUG
+  //static constexpr size_t WARMUP_SAMPLES = 100;
+//#else
+  static constexpr size_t WARMUP_SAMPLES = 2000;   //10: fast activation in debug
+//#endif
 
   /*! \brief Start timing for a Function Block's execution.
    *
@@ -221,6 +221,11 @@ public:
 
   void stopPeriodicExport();
 
+  //DeadlineStrategy mDefaultStrategy{DeadlineStrategy::MEAN_PLUS_3SIG};
+  DeadlineStrategy mDefaultStrategy{DeadlineStrategy::P90};
+
+  double mDeadlineMultiplier = 1.2;
+
 private:
   CEETMonitor() = default;
 
@@ -253,8 +258,6 @@ private:
 
   std::thread  mExportThread;
   std::atomic<bool> mExportRunning{false};
-
-  DeadlineStrategy mDefaultStrategy{DeadlineStrategy::MEAN_PLUS_3SIG};
 };
 
 #endif // _EETMONITOR_H_
