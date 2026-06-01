@@ -10,12 +10,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 void CEETMonitor::startMeasurement(TStringId paFBId) {
-  if (forte::eet::isMonitoringExcluded(paFBId))
+  if(forte::eet::isMonitoringExcluded(paFBId))
     return;
   std::lock_guard<std::mutex> lock(mMutex);
-  // Overwrite any existing in-progress timestamp. Handles the case where
-  // a previous endMeasurement was never called (e.g. an event was dropped).
-  mStartTimes[paFBId] = Clock::now();
+  // Only record start if no measurement is already in progress.
+  // Overwriting would corrupt the timestamp for FBs that receive re-entrant
+  // calls (e.g. FBs that fire multiple output events per input event).
+  if(mStartTimes.find(paFBId) == mStartTimes.end()) {
+    mStartTimes[paFBId] = Clock::now();
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -40,6 +43,10 @@ void CEETMonitor::endMeasurement(TStringId paFBId) {
         std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - startIt->second).count();
 
     mStartTimes.erase(startIt);
+
+    if(durationNs <= 0) {
+    return;
+    }
 
     auto &durations = mDurations[paFBId];
     if (durations.size() >= MAX_SAMPLES) {
