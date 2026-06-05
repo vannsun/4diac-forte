@@ -32,9 +32,10 @@ public:
  
   // Register or update a deadline for an FB.
   // Called by CEETMonitor::activateFET once enough EET samples exist.
-  void registerFB(TStringId paFBId,
-                  std::chrono::nanoseconds paDeadline,
-                  FETErrorCallback paCallback = nullptr);
+void registerFB(TStringId paFBId,
+                std::chrono::nanoseconds paDeadline,
+                FETErrorCallback paCallback = nullptr,
+                std::function<void()> paOnEnforced = nullptr);
  
   // Called at the start of receiveInputEvent, before executeEvent.
   void startMeasurement(TStringId paFBId);
@@ -61,6 +62,7 @@ private:
     FETErrorCallback         callback;
     TimePoint                startTime{};
     bool                     active{false};
+    std::function<void()>    onEnforced;
   };
  
   mutable std::mutex                           mMutex;

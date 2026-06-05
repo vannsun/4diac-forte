@@ -8,13 +8,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 void CFETMonitor::registerFB(TStringId paFBId,
-                              std::chrono::nanoseconds paDeadline,
-                              FETErrorCallback paCallback) {
+                             std::chrono::nanoseconds paDeadline,
+                             FETErrorCallback paCallback,
+                             std::function<void()> paOnEnforced) {
   std::lock_guard<std::mutex> lock(mMutex);
-  auto& state    = mStates[paFBId];
+  auto &state = mStates[paFBId];
   state.deadline = paDeadline;
   state.callback = paCallback;
-  // Preserve active/startTime if a measurement is already in progress.
+  state.onEnforced = paOnEnforced;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,11 +29,11 @@ void CFETMonitor::startMeasurement(TStringId paFBId) {
 
   std::lock_guard<std::mutex> lock(mMutex);
   auto it = mStates.find(paFBId);
-  if(it == mStates.end()) {
-    return;  // Not registered — nothing to do.
+  if (it == mStates.end()) {
+    return; // Not registered — nothing to do.
   }
   it->second.startTime = now;
-  it->second.active    = true;
+  it->second.active = true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -48,64 +49,43 @@ void CFETMonitor::startMeasurement(TStringId paFBId) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool CFETMonitor::waitUntilDeadline(TStringId paFBId) {
-  // Capture end time before the lock — keeps elapsed measurement accurate.
   const auto endTime = Clock::now();
 
   FBState stateCopy;
   {
     std::lock_guard<std::mutex> lock(mMutex);
     auto it = mStates.find(paFBId);
-    if(it == mStates.end()) {
-      return true;  // Not registered.
-    }
-
-    FBState& state = it->second;
-    if(!state.active) {
-      return true;  // No matching startMeasurement, or already consumed.
-    }
-
+    if (it == mStates.end())
+      return true;
+    FBState &state = it->second;
+    if (!state.active)
+      return true;
     stateCopy = state;
-    // Mark inactive now — prevents double-sleep when sendOutputEvent is
-    // called for multiple output events within the same receiveInputEvent.
     state.active = false;
   }
 
-  // All time values in nanoseconds.
-  const auto elapsed =
-    std::chrono::duration_cast<std::chrono::nanoseconds>(
-      endTime - stateCopy.startTime);
+  const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - stateCopy.startTime);
 
-  if(elapsed > stateCopy.deadline) {
-    DEVLOG_ERROR(
-      "FETMonitor: deadline missed for FB '%s': "
-      "elapsed=%lldns  deadline=%lldns  overshoot=%lldns\n",
-      paFBId,
-      static_cast<long long>(elapsed.count()),
-      static_cast<long long>(stateCopy.deadline.count()),
-      static_cast<long long>((elapsed - stateCopy.deadline).count()));
+  if (elapsed > stateCopy.deadline) {
+    DEVLOG_ERROR("FETMonitor: deadline missed for FB '%s': "
+                 "elapsed=%lldns  deadline=%lldns  overshoot=%lldns\n",
+                 paFBId, static_cast<long long>(elapsed.count()), static_cast<long long>(stateCopy.deadline.count()),
+                 static_cast<long long>((elapsed - stateCopy.deadline).count()));
 
-    if(stateCopy.callback) {
+    if (stateCopy.callback)
       stateCopy.callback(paFBId);
-    }
+    if (stateCopy.onEnforced)
+      stateCopy.onEnforced(); // ← record violation
     return false;
   }
 
-  // Normal path: pad remaining time so triggerEvent always fires at
-  // exactly startTime + deadline — deterministic downstream timing.
   const auto remaining = stateCopy.deadline - elapsed;
-
-  DEVLOG_INFO(
-    "FETMonitor: '%s' elapsed=%lldns deadline=%lldns sleeping=%lldns\n",
-    paFBId,
-    static_cast<long long>(elapsed.count()),
-    static_cast<long long>(stateCopy.deadline.count()),
-    static_cast<long long>(remaining.count()));
-
   std::this_thread::sleep_for(remaining);
-  return true;
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
+  if (stateCopy.onEnforced)
+    stateCopy.onEnforced(); // ← record after sleep
+  return true;
+} // ─────────────────────────────────────────────────────────────────────────────
 // unregisterFB
 // ─────────────────────────────────────────────────────────────────────────────
 

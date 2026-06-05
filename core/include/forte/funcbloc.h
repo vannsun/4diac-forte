@@ -224,35 +224,34 @@ namespace forte {
        * \param paExecEnv Event chain execution environment the FB will be executed in (used for adding output events).
        */
       void receiveInputEvent(TEventID paEIID, CEventChainExecutionThread *paExecEnv) {
-        FORTE_TRACE("InputEvent: Function Block (%s) got event: %d (maxid: %d)\n",
-                    getInstanceNameId().data(), paEIID,
+        FORTE_TRACE("InputEvent: Function Block (%s) got event: %d (maxid: %d)\n", getInstanceNameId().data(), paEIID,
                     getFBInterfaceSpec().getNumEIs() - 1);
-      
-      #ifdef FORTE_TRACE_CTF
+
+#ifdef FORTE_TRACE_CTF
         traceInputEvent(paEIID);
-      #endif
-      
-        if(E_FBStates::Running == getState()) {
-          if(paEIID < getFBInterfaceSpec().getNumEIs()) {
+#endif
+
+        if (E_FBStates::Running == getState()) {
+          if (paEIID < getFBInterfaceSpec().getNumEIs()) {
             readInputData(paEIID);
             mEventMonitorCount[paEIID]++;
           }
 
-#ifdef FORTE_EET_MONITORING      
+#ifdef FORTE_EET_MONITORING
           // EET: start timestamp for this execution.
           CEETMonitor::getInstance().startMeasurement(getInstanceNameId().data());
 #endif
-#ifdef FORTE_FET_ENFORCEMENT      
+#ifdef FORTE_FET_ENFORCEMENT
           // After warmup, EET computes the deadline and hands it to FET.
           // activateFET is a no-op if already activated or not enough samples yet.
-          //CEETMonitor::getInstance().activateFET(getInstanceNameId().data());
-      
+          // CEETMonitor::getInstance().activateFET(getInstanceNameId().data());
+
           // FET: start countdown — silently ignored until EET activates it.
           CFETMonitor::getInstance().startMeasurement(getInstanceNameId().data());
-#endif      
+#endif
           executeEvent(paEIID, paExecEnv);
-      
-          if(mForces.any()) [[unlikely]] {
+
+          if (mForces.any()) [[unlikely]] {
             resetForcedOutputs();
           }
         }
@@ -421,36 +420,35 @@ namespace forte {
        * \param paEO Event output ID where event should be fired.
        * \param paExecEnv Event chain execution environment where the event will be sent to.
        */
-      void sendOutputEvent(TEventID paEO, CEventChainExecutionThread *const paECET) {     
-      #ifdef FORTE_TRACE_CTF
+      void sendOutputEvent(TEventID paEO, CEventChainExecutionThread *const paECET) {
+#ifdef FORTE_TRACE_CTF
         traceOutputEvent(paEO, paECET);
-      #endif
-      
+#endif
+
         size_t numEOs = getFBInterfaceSpec().getNumEOs();
-        if(paEO < numEOs) {
+        if (paEO < numEOs) {
           writeOutputData(paEO);
-      
-      #ifdef FORTE_EET_MONITORING
+
+#ifdef FORTE_EET_MONITORING
           // EET: record end timestamp.
           // FET: cancel countdown — FB finished in time.
           // Both happen before triggerEvent so the measurement window closes when
           // output data is ready, not after downstream FBs have been queued.
           CEETMonitor::getInstance().endMeasurement(getInstanceNameId().data());
-      #endif
+#endif
 
-      FORTE_TRACE("OutputEvent: Function Block (%s) sending event: %d (maxid: %d)\n",
-                    getInstanceNameId().data(), paEO,
-                    getFBInterfaceSpec().getNumEOs() - 1);
+          FORTE_TRACE("OutputEvent: Function Block (%s) sending event: %d (maxid: %d)\n", getInstanceNameId().data(),
+                      paEO, getFBInterfaceSpec().getNumEOs() - 1);
 
-      #ifdef FORTE_FET_ENFORCEMENT
+#ifdef FORTE_FET_ENFORCEMENT
           const bool withinDeadline = CFETMonitor::getInstance().waitUntilDeadline(getInstanceNameId().data());
           // Enforcement Mechanism
-        if(withinDeadline) {
-      #endif
+          if (withinDeadline) {
+#endif
             getEOConUnchecked(static_cast<TPortId>(paEO))->triggerEvent(paECET);
-      #ifdef FORTE_FET_ENFORCEMENT
-        }
-      #endif
+#ifdef FORTE_FET_ENFORCEMENT
+          }
+#endif
           mEventMonitorCount[mEventMonitorCount.size() - numEOs + paEO]++;
         }
       }

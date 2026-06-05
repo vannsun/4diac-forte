@@ -17,11 +17,14 @@
 #include "forte/devicefactory.h"
 
 #ifdef FORTE_EET_MONITORING
+#include "forte/eetmonitor.h"
+#include <csignal>
 // Called on Ctrl+C or VSCode stop (SIGTERM/SIGINT).
 // Exports whatever samples exist at that moment.
 static void onSignal(int) {
   CEETMonitor::getInstance().stopPeriodicExport();
   CEETMonitor::getInstance().exportAllCSV("eet_results");
+  CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
   std::exit(0);
 }
 #endif
@@ -32,6 +35,7 @@ namespace forte {
 #ifdef FORTE_EET_MONITORING
       CEETMonitor::getInstance().stopPeriodicExport();
       CEETMonitor::getInstance().exportAllCSV("eet_results");
+      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
 #endif
       mActiveDevice->deinitialize();
     }
@@ -48,6 +52,7 @@ namespace forte {
 
       // Flush whatever samples the last periodic export did not yet capture.
       CEETMonitor::getInstance().exportAllCSV("eet_results");
+      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
 #endif
 
       // we have a current active device stop it
@@ -69,10 +74,13 @@ namespace forte {
       // Scenario 1:
       // CEETMonitor::getInstance().startPeriodicExport("eet_results", std::chrono::seconds(60), 5000);
       // Scenario 2:
+      std::signal(SIGINT, onSignal);
+      std::signal(SIGTERM, onSignal);
       CEETMonitor::getInstance().mDefaultStrategy = CEETMonitor::DeadlineStrategy::P90;
       CEETMonitor::getInstance().mDeadlineMultiplier = 1.2;
       // CEETMonitor::getInstance().startPeriodicExport("eet_results", std::chrono::seconds(120), 1000);
-      CEETMonitor::getInstance().startPeriodicExport("eet_results", std::chrono::seconds(120), 3000);
+      // Every 7 minutes the export will take place until 3000 TargetSamples
+      CEETMonitor::getInstance().startPeriodicExport("eet_results", "eet_results_enforced", std::chrono::seconds(400), 3000);
 #endif
     }
     return mActiveDevice.operator bool();
@@ -83,6 +91,7 @@ namespace forte {
 #ifdef FORTE_EET_MONITORING
       CEETMonitor::getInstance().stopPeriodicExport();
       CEETMonitor::getInstance().exportAllCSV("eet_results");
+      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
 #endif
       mActiveDevice->changeExecutionState(EMGMCommandType::Kill);
     }
