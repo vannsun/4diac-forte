@@ -10,13 +10,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 void CEETMonitor::startMeasurement(TStringId paFBId) {
-  if(forte::eet::isMonitoringExcluded(paFBId))
+  if (forte::eet::isMonitoringExcluded(paFBId))
     return;
   std::lock_guard<std::mutex> lock(mMutex);
   // Only record start if no measurement is already in progress.
   // Overwriting would corrupt the timestamp for FBs that receive re-entrant
   // calls (e.g. FBs that fire multiple output events per input event).
-  if(mStartTimes.find(paFBId) == mStartTimes.end()) {
+  if (mStartTimes.find(paFBId) == mStartTimes.end()) {
     mStartTimes[paFBId] = Clock::now();
   }
 }
@@ -28,37 +28,58 @@ void CEETMonitor::startMeasurement(TStringId paFBId) {
 void CEETMonitor::endMeasurement(TStringId paFBId) {
   if (forte::eet::isMonitoringExcluded(paFBId))
     return;
-  // Capture end time before the lock to minimise measurement error.
+
   const auto endTime = Clock::now();
 
-  {
-    std::lock_guard<std::mutex> lock(mMutex);
+  std::lock_guard<std::mutex> lock(mMutex);
 
-    auto startIt = mStartTimes.find(paFBId);
-    if (startIt == mStartTimes.end()) {
-      return; // No matching startMeasurement.
-    }
-
-    const long long durationNs =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - startIt->second).count();
-
-    mStartTimes.erase(startIt);
-
-    if(durationNs <= 0) {
+  auto startIt = mStartTimes.find(paFBId);
+  if (startIt == mStartTimes.end())
     return;
-    }
 
-    auto &durations = mDurations[paFBId];
-    if (durations.size() >= MAX_SAMPLES) {
-      durations.erase(durations.begin());
+  const long long durationNs = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - startIt->second).count();
+
+  mStartTimes.erase(startIt);
+
+  if (durationNs <= 0)
+    return;
+
+  auto &samples = mSamples[paFBId];
+
+  if (samples.size() >= MAX_SAMPLES)
+    samples.erase(samples.begin());
+
+  Sample sample;
+  sample.durationNs = durationNs;
+  sample.timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime.time_since_epoch());
+
+  // -------------------- FET STATE --------------------
+  auto it = mFETActivated.find(paFBId);
+  const bool fet = (it != mFETActivated.end() && it->second);
+  sample.fetActive = fet;
+
+  // -------------------- DEADLINE MISS --------------------
+  sample.deadlineMiss = false;
+  if (fet) {
+    const long long deadlineNs = getConfiguredDeadline(paFBId);
+    if (deadlineNs > 0) {
+      sample.deadlineMiss = (durationNs > deadlineNs);
     }
-    durations.push_back(durationNs);
   }
 
-  // Attempt FET activation — no-op until WARMUP_SAMPLES are collected,
-  // and no-op on all subsequent calls once activated.
-  // Called outside the lock because activateFET takes its own lock
-  // and then calls CFETMonitor which has its own lock.
+  // -------------------- PHASE --------------------
+  auto sampleCount = samples.size();
+
+  if (!fet) {
+    sample.phase = ExecutionPhase::WARMUP;
+  } else if (sampleCount < WARMUP_SAMPLES + 200) {
+    sample.phase = ExecutionPhase::TRANSITION;
+  } else {
+    sample.phase = ExecutionPhase::FET_ACTIVE;
+  }
+
+  samples.push_back(sample);
+
   activateFET(paFBId, mDefaultStrategy);
 }
 
@@ -136,8 +157,8 @@ long long CEETMonitor::getMax(TStringId paFBId) const {
 
 size_t CEETMonitor::getSampleCount(TStringId paFBId) const {
   std::lock_guard<std::mutex> lock(mMutex);
-  auto it = mDurations.find(paFBId);
-  return (it != mDurations.end()) ? it->second.size() : 0u;
+  auto it = mSamples.find(paFBId);
+  return (it != mSamples.end()) ? it->second.size() : 0u;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -192,33 +213,27 @@ void CEETMonitor::activateFET(TStringId paFBId, DeadlineStrategy strategy) {
     std::lock_guard<std::mutex> lock(mMutex);
 
     auto activatedIt = mFETActivated.find(paFBId);
-    if (activatedIt != mFETActivated.end() && activatedIt->second) {
+    if (activatedIt != mFETActivated.end() && activatedIt->second)
       return;
-    }
 
-    auto durIt = mDurations.find(paFBId);
-    if (durIt == mDurations.end() || durIt->second.size() < WARMUP_SAMPLES) {
+    auto samplesIt = mSamples.find(paFBId);
+    if (samplesIt == mSamples.end() || samplesIt->second.size() < WARMUP_SAMPLES)
       return;
-    }
 
     mFETActivated[paFBId] = true;
   }
 
-  // Compute deadline outside the lock — stat helpers take their own lock.
   const long long deadlineNs = getDeadlineSuggestion(paFBId, strategy);
-  if (deadlineNs <= 0) {
-    return;
-  }
 
-  // Store for logging and CSV export.
+  if (deadlineNs <= 0)
+    return;
+
   setConfiguredDeadline(paFBId, deadlineNs);
 
-  // Register with FET — enforcement starts from the next receiveInputEvent.
   CFETMonitor::getInstance().registerFB(paFBId, std::chrono::nanoseconds(deadlineNs),
                                         [](TStringId paId) { DEVLOG_ERROR("FET deadline missed: %s\n", paId); });
 
-  DEVLOG_INFO("EET-FET: activated deadline %lldns for '%s' after %zu warmup samples\n", deadlineNs, paFBId,
-              static_cast<size_t>(WARMUP_SAMPLES));
+  DEVLOG_INFO("EET-FET: activated deadline %lldns for '%s'\n", deadlineNs, paFBId);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,7 +242,7 @@ void CEETMonitor::activateFET(TStringId paFBId, DeadlineStrategy strategy) {
 
 void CEETMonitor::clearData(TStringId paFBId) {
   std::lock_guard<std::mutex> lock(mMutex);
-  mDurations.erase(paFBId);
+  mSamples.erase(paFBId);
   mStartTimes.erase(paFBId);
   mConfiguredDeadlines.erase(paFBId);
   mFETActivated.erase(paFBId);
@@ -235,7 +250,7 @@ void CEETMonitor::clearData(TStringId paFBId) {
 
 void CEETMonitor::clearAllData() {
   std::lock_guard<std::mutex> lock(mMutex);
-  mDurations.clear();
+  mSamples.clear();
   mStartTimes.clear();
   mConfiguredDeadlines.clear();
   mFETActivated.clear();
@@ -260,25 +275,32 @@ void CEETMonitor::exportCSV(TStringId paFBId, const std::string &paFileName) con
 // exportAllCSV
 // ─────────────────────────────────────────────────────────────────────────────
 
-void CEETMonitor::exportAllCSV(const std::string &paDirectory) const {
-  // Match the exact type of mDurations from eetmonitor.h
-  std::map<TStringId, std::vector<long long>> snapshot;
+void CEETMonitor::exportAllCSV(const std::string &dir) const {
+
+  std::map<TStringId, std::vector<Sample>> snapshot;
   {
     std::lock_guard<std::mutex> lock(mMutex);
-    snapshot = mDurations;
+    snapshot = mSamples;
   }
 
-  std::filesystem::create_directories(paDirectory);
-  for (const auto &[fbId, durations] : snapshot) {
-    const std::string filename = paDirectory + "/" + std::string(fbId) + ".csv";
-    std::ofstream file(filename);
+  std::filesystem::create_directories(dir);
+
+  for (const auto &[fbId, samples] : snapshot) {
+
+    const std::string fileName = dir + "/" + std::string(fbId) + ".csv";
+
+    std::ofstream file(fileName);
     if (!file.is_open())
       continue;
-    file << "execution_ns\n";
-    for (const auto &d : durations) {
-      file << d << "\n";
+
+    file << "timestamp_ns,duration_ns,fet_active,deadline_miss,phase\n";
+
+    for (const auto &s : samples) {
+      file << s.timestamp.count() << "," << s.durationNs << "," << (s.fetActive ? 1 : 0) << ","
+           << (s.deadlineMiss ? 1 : 0) << "," << static_cast<int>(s.phase) << "\n";
     }
-    DEVLOG_INFO("EETMonitor: exported %zu samples for '%s'\n", durations.size(), fbId);
+
+    DEVLOG_INFO("EETMonitor: exported %zu samples for '%s'\n", samples.size(), fbId);
   }
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,8 +342,8 @@ void CEETMonitor::startPeriodicExport(const std::string &paDirectory,
         bool allDone = false;
         {
           std::lock_guard<std::mutex> lock(mMutex); // ← lock
-          allDone = !mDurations.empty();
-          for (const auto &[id, d] : mDurations) {
+          allDone = !mSamples.empty();
+          for (const auto &[id, d] : mSamples) {
             if (d.size() < paTargetSamples) {
               allDone = false;
               break;
@@ -360,8 +382,18 @@ void CEETMonitor::stopPeriodicExport() {
 
 std::vector<long long> CEETMonitor::getDurationsCopy(TStringId paFBId) const {
   std::lock_guard<std::mutex> lock(mMutex);
-  auto it = mDurations.find(paFBId);
-  if (it == mDurations.end())
+
+  std::vector<long long> result;
+
+  auto it = mSamples.find(paFBId);
+  if (it == mSamples.end())
     return {};
-  return it->second;
+
+  result.reserve(it->second.size());
+
+  for (const auto &s : it->second) {
+    result.push_back(s.durationNs);
+  }
+
+  return result;
 }
