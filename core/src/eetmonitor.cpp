@@ -262,9 +262,9 @@ void CEETMonitor::startPeriodicExport(const std::string &paDirectory,
           }
         }
 
-        // Progress log every 20 seconds.
-        if (now - lastExport >= std::chrono::seconds(20)) {
-          DEVLOG_INFO("EETMonitor: progress — min samples across FBs: %zu / %zu\n", minCount == SIZE_MAX ? 0 : minCount,
+        // Progress log every 30 seconds.
+        if (now - lastExport >= std::chrono::seconds(30)) {
+          DEVLOG_INFO("EETMonitor: progress - min samples across FBs: %zu / %zu\n", minCount == SIZE_MAX ? 0 : minCount,
                       paTargetSamples);
         }
 
