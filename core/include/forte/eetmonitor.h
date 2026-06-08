@@ -13,12 +13,6 @@
 #include <thread>
 #include <atomic>
 
-/*! \brief Portable alias for FORTE's CStringDictionary::TStringId.
- *
- * In standalone builds this is const char* (FORTE interns all strings so
- * pointer equality is identity equality).
- * When integrating into FORTE, replace with CStringDictionary::TStringId.
- */
 using TStringId = const char *;
 
 /*! \ingroup CORE \brief Singleton class for monitoring Estimated Execution Time (EET) of Function Blocks.
@@ -32,19 +26,14 @@ using TStringId = const char *;
  * Memory: each FB accumulates up to MAX_SAMPLES durations in a sliding window.
  * Older samples are dropped once the cap is reached.
  *
- * FORTE integration notes:
- *   - Replace TStringId with CStringDictionary::TStringId
- *   - Replace singleton implementation with DECLARE_SINGLETON(CEETMonitor)
- *   - Add DEFINE_SINGLETON(CEETMonitor) in eetmonitor.cpp
- *   - Add #include <forte_config.h>, <stringdict.h>, "utils/singlet.h"
  */
 class CEETMonitor {
   public:
     /*! \brief Strategy used to compute the deadline suggestion from collected samples.
      *
-     *  MAX             — strictest: never allow above observed worst case
-     *  P90             — 90th percentile: ignores outliers, good general default
-     *  MEAN_PLUS_3SIG  — mean + 3*stddev: statistically principled (~99.7% coverage)
+     *  MAX             — observed worst case (WCET)
+     *  P90             — 90th percentile, ignores outliers
+     *  MEAN_PLUS_3SIG  — mean + 3*stddev statistically ~99.7% coverage
      */
     enum class DeadlineStrategy { MAX, P90, MEAN_PLUS_3SIG };
 
@@ -57,45 +46,63 @@ class CEETMonitor {
     CEETMonitor(const CEETMonitor &) = delete;
     CEETMonitor &operator=(const CEETMonitor &) = delete;
 
-    /*! \brief Maximum number of duration samples stored per FB (sliding window). */
+    /*! \brief Maximum number of samples stored per FB in the sliding window.
+     *
+     * Controls how many samples are retained in memory, once the MAX_SAMPLES
+     * is exceded, the oldest samples start being discarded
+     *  Used by FORTE_EET_MONITORING.
+     */
     static constexpr size_t MAX_SAMPLES = 5000;
 
-    /*! \brief Number of samples collected before activateFET() considers data stable. */
-    // static constexpr size_t WARMUP_SAMPLES = 1000;
-    //  In eetmonitor.h:
-    // #ifdef NDEBUG
-    // static constexpr size_t WARMUP_SAMPLES = 100;
-    // #else
+    /*! \brief Number of samples collected before FET deadline is derived and activated.
+     * Controls when FET is activated
+     * Used by FORTE_EET_MONITORING + FORTE_FET_ENFORCEMENT.
+     * */
     static constexpr size_t WARMUP_SAMPLES = 2000;
-    // #endif
+
+    /*! \brief Deadline derivation strategy applied at FET activation.
+     *
+     * Can be overridden before startDevice() in forteinstance.cpp.
+     */
+    DeadlineStrategy mDefaultStrategy{DeadlineStrategy::P90};
+
+    /*! \brief Multiplier applied to the derived deadline (e.g. P90 × 1.2).
+     *
+     *  Adds headroom above the measured percentile.
+     */
+    double mDeadlineMultiplier = 1.2;
+
+    /*! \brief Execution phase of a recorded sample. */
+    enum class ExecutionPhase {
+      WARMUP, ///< Collected before FET activation (no enforcement)
+      FET_ACTIVE, ///< Collected after FET activation (enforcement active)
+      ENFORCED ///< Collected after waitUntilDeadline (includes FET sleep)
+    };
+
+    /*! \brief Single EET measurement sample with metadata. */
+    struct Sample {
+        long long durationNs; ///< Measured execution time in nanoseconds
+        long long timestampNs; ///< Wall-clock timestamp at end of measurement
+        long long deadlineNs; ///< Registered FET deadline at time of measurement (0 if not yet activated)
+        bool fetActive; ///< True if FET was active when this sample was recorded
+        bool deadlineMiss; ///< True if durationNs exceeded deadlineNs
+        ExecutionPhase phase; ///< Warmup, enforcement-active, or enforced (post-sleep)
+    };
 
     /*! \brief Start timing for a Function Block's execution.
      *
-     * Call this when a triggering input event arrives (e.g., in receiveInputEvent).
-     * If a measurement for this FB is already in progress it is silently overwritten,
-     * which handles the case where a previous endMeasurement was never called.
-     *
+     * Called when a triggering input event arrives (receiveInputEvent).
      * \param paFBId The FB's instance name ID.
      */
     void startMeasurement(TStringId paFBId);
 
-    /*! \brief End timing for a Function Block's execution.
+    /*! \brief End timing for a Function Block's after enforcement.
      *
-     * Call this when the FB produces an output event (e.g., in sendOutputEvent).
-     * Computes the duration and appends it to the histogram for paFBId.
-     * If no matching startMeasurement exists for paFBId this call is a safe no-op.
+     * Called when the FB produces an output event (sendOutputEvent).
      *
      * \param paFBId The FB's instance name ID.
      */
     void endMeasurement(TStringId paFBId);
-
-    /*! \brief End timing for a Function Block's after enforcement.
-     *
-     * Call this when the FB produces an output event (e.g., in sendOutputEvent).
-     *
-     * \param paFBId The FB's instance name ID.
-     */
-    void endMeasurementEnforced(TStringId paFBId);
 
     /*! \brief Get the stored duration samples (nanoseconds) for a FB.
      *
@@ -139,49 +146,6 @@ class CEETMonitor {
      */
     long long getMax(TStringId paFBId) const;
 
-    /*! \brief Return the number of completed measurements stored for a FB.
-     *
-     * \param paFBId The FB's instance name ID.
-     * \return Sample count, or 0 if paFBId is unknown.
-     */
-    size_t getSampleCount(TStringId paFBId) const;
-
-    /*! \brief Clear all stored data for a specific FB.
-     *
-     * Removes both completed durations and any in-progress start timestamp.
-     *
-     * \param paFBId The FB's instance name ID.
-     */
-    void clearData(TStringId paFBId);
-
-    /*! \brief Clear all stored data for all FBs. */
-    void clearAllData();
-
-    /*! \brief Export duration data for a specific FB to a CSV file.
-     *
-     * \param paFBId     The FB's instance name ID.
-     * \param paFileName Output file path.
-     */
-    void exportCSV(TStringId paFBId, const std::string &paFileName) const;
-
-    /*! \brief Export duration data for all FBs to individual CSV files.
-     *
-     * Creates one file per FB named <fbId>.csv inside paDirectory.
-     * The directory is created if it does not exist.
-     *
-     * \param paDirectory Output directory path.
-     */
-    void exportAllCSV(const std::string &paDirectory) const;
-
-    /*! \brief Export duration data for all FBs to individual CSV files.
-     *
-     * Creates one file per FB named <fbId>.csv inside paDirectory.
-     * The directory is created if it does not exist.
-     *
-     * \param paDirectory Output directory path.
-     */
-    void exportAllCSVEnforced(const std::string &paDirectory) const;
-
     /*! \brief Compute a deadline suggestion from collected samples.
      *
      * Returns 0 if there is not enough data yet.
@@ -191,22 +155,6 @@ class CEETMonitor {
      * \return Suggested deadline in nanoseconds.
      */
     long long getDeadlineSuggestion(TStringId paFBId, DeadlineStrategy strategy) const;
-
-    /*! \brief Store a configured deadline for a FB (for logging / export).
-     *
-     * Called automatically by activateFET(). Can also be called manually.
-     *
-     * \param paFBId       The FB's instance name ID.
-     * \param paDeadlineNs Deadline in nanoseconds.
-     */
-    void setConfiguredDeadline(TStringId paFBId, long long paDeadlineNs);
-
-    /*! \brief Retrieve the stored configured deadline for a FB.
-     *
-     * \param paFBId The FB's instance name ID.
-     * \return Deadline in nanoseconds, or 0 if not set.
-     */
-    long long getConfiguredDeadline(TStringId paFBId) const;
 
     /*! \brief Compute deadline from EET data and register the FB with CFETMonitor.
      *
@@ -224,28 +172,40 @@ class CEETMonitor {
      */
     void activateFET(TStringId paFBId, DeadlineStrategy strategy = DeadlineStrategy::MEAN_PLUS_3SIG);
 
+    // #ifdef FORTE_EET_EVALUATION
+    /*! \brief Export duration data for a specific FB to a CSV file.
+     *
+     * \param paFBId     The FB's instance name ID.
+     * \param paFileName Output file path.
+     */
+    void exportCSV(TStringId paFBId, const std::string &paFileName) const;
+
+    /*! \brief Export duration data for all FBs to individual CSV files.
+     *
+     * Creates one file per FB named <fbId>.csv inside paDirectory.
+     * The directory is created if it does not exist.
+     *
+     * \param paDirectory Output directory path.
+     */
+    void exportAllCSV(const std::string &paDirectory) const;
+
+    /*! \brief Starts a background thread that periodically exports EET and enforced samples to CSV.
+     *
+     * Stops automatically when paTargetSamples is reached by all FBs,
+     * or when stopPeriodicExport() is called. Only active under FORTE_EET_EVALUATION.
+     *
+     *  \param paDirectory          Output directory for raw EET samples (eet_results).
+     *  \param paDirectoryEnforced  Output directory for enforced samples (eet_results_enforced).
+     *  \param paInterval           Interval between periodic exports (safety net).
+     *  \param paTargetSamples      Stop when all FBs reach this count (0 = run indefinitely). */
     void startPeriodicExport(const std::string &paDirectory,
                              const std::string &paDirectoryEnforced,
                              std::chrono::seconds paInterval,
                              size_t paTargetSamples = 0);
 
+    /*! \brief Stops the periodic export thread and waits for it to finish. */
     void stopPeriodicExport();
-
-    // DeadlineStrategy mDefaultStrategy{DeadlineStrategy::MEAN_PLUS_3SIG};
-    DeadlineStrategy mDefaultStrategy{DeadlineStrategy::P90};
-
-    double mDeadlineMultiplier = 1.2;
-
-    enum class ExecutionPhase { WARMUP, FET_ACTIVE, ENFORCED };
-
-    struct Sample {
-        long long durationNs;
-        long long timestampNs;
-        long long deadlineNs;
-        bool fetActive;
-        bool deadlineMiss;
-        ExecutionPhase phase;
-    };
+    // #endif // FORTE_EET_EVALUATION
 
   private:
     CEETMonitor() = default;
@@ -257,33 +217,45 @@ class CEETMonitor {
      */
     std::vector<long long> getDurationsCopy(TStringId paFBId) const;
 
+    /*! \brief Monotonic high-resolution clock used for all EET timestamps. */
     using Clock = std::chrono::high_resolution_clock;
 
-    // Protects mSamples, mStartTimes and mConfiguredDeadlines for concurrent access.
+    /*! \brief Protects all mutable state against concurrent access from
+     *  the ECET thread and the periodic export thread. (mSamples, mStartTimes)
+     */
     mutable std::mutex mMutex;
 
-    // Per-FB list of completed execution durations for samples in nanoseconds (insertion order).
-    // Capped at MAX_SAMPLES via a sliding window.
+    /*! \brief Per-FB sliding window of EET samples (raw algorithm time).
+     *
+     * Capped at MAX_SAMPLES. Includes phase and deadline metadata per sample.
+     */
     std::map<TStringId, std::vector<Sample>> mSamples;
-    std::map<TStringId, std::vector<Sample>> mSamplesEnforced;
 
-    // Per-FB start timestamp for the measurement currently in progress.
-    // Entry is erased by endMeasurement once the duration has been recorded.
+    /*! \brief Per-FB real-time (wall-clock) start timestamp for the measurement in progress.
+     *  Set by startMeasurement(), erased by endMeasurement(). */
     std::map<TStringId, Clock::time_point> mStartTimes;
-    // In eetmonitor.h — add alongside mStartTimes:
-    std::map<TStringId, Clock::time_point> mStartTimesEnforced;
 
-    // Per-FB deadline computed by activateFET() and stored for logging/export.
-    std::unordered_map<TStringId, long long> mConfiguredDeadlines;
+    /*! \brief Per-FB activation flag. True once activateFET() has registered
+     *  this FB with CFETMonitor. Prevents re-registration on subsequent events. */
+    struct FETState {
+        bool active = false;
+        long long deadlineNs = 0;
+    };
+    std::map<TStringId, FETState> mFETActivated;
 
-    // Per-FB flag: true once activateFET() has been called for this FB.
-    // Prevents re-registration on every subsequent event after warmup.
-    std::unordered_map<TStringId, bool> mFETActivated;
-
+    /*! \brief Per-FB total sample count since device start, unbounded by MAX_SAMPLES.
+     * Used as the warmup counter unlike mSamples.size() this never shrinks
+     * when the sliding window evicts old entries. */
     std::map<TStringId, size_t> mWarmupCount;
 
+    // #ifdef FORTE_EET_EVALUATION
+    /*! \brief Background thread that periodically writes CSVs to disk. */
     std::thread mExportThread;
+
+    /*! \brief True while the export thread is running. Set to false to
+     *  request graceful shutdown; stopPeriodicExport() blocks until exit. */
     std::atomic<bool> mExportRunning{false};
+    // #endif
 };
 
 #endif // _EETMONITOR_H_

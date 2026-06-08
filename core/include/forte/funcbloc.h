@@ -31,7 +31,6 @@
 #include "forte/util/devlog.h"
 #include "forte/stringid.h"
 #include "eetmonitor.h"
-#include "fetmonitor.h"
 
 #include <bitset>
 
@@ -229,28 +228,18 @@ namespace forte {
 
 #ifdef FORTE_TRACE_CTF
         traceInputEvent(paEIID);
-#endif
-
+#endif // FORTE_TRACE_CTF
         if (E_FBStates::Running == getState()) {
           if (paEIID < getFBInterfaceSpec().getNumEIs()) {
             readInputData(paEIID);
+            // Count Event for monitoring
             mEventMonitorCount[paEIID]++;
           }
-
 #ifdef FORTE_EET_MONITORING
           // EET: start timestamp for this execution.
           CEETMonitor::getInstance().startMeasurement(getInstanceNameId().data());
 #endif
-#ifdef FORTE_FET_ENFORCEMENT
-          // After warmup, EET computes the deadline and hands it to FET.
-          // activateFET is a no-op if already activated or not enough samples yet.
-          // CEETMonitor::getInstance().activateFET(getInstanceNameId().data());
-
-          // FET: start countdown — silently ignored until EET activates it.
-          CFETMonitor::getInstance().startMeasurement(getInstanceNameId().data());
-#endif
           executeEvent(paEIID, paExecEnv);
-
           if (mForces.any()) [[unlikely]] {
             resetForcedOutputs();
           }
@@ -421,34 +410,23 @@ namespace forte {
        * \param paExecEnv Event chain execution environment where the event will be sent to.
        */
       void sendOutputEvent(TEventID paEO, CEventChainExecutionThread *const paECET) {
+#ifdef FORTE_EET_MONITORING
+        // EET: record end timestamp.
+        CEETMonitor::getInstance().endMeasurement(getInstanceNameId().data());
+#endif
+        FORTE_TRACE("OutputEvent: Function Block (%s) sending event: %d (maxid: %d)\n", getInstanceNameId().data(),
+                    paEO, getFBInterfaceSpec().getNumEOs() - 1);
+
 #ifdef FORTE_TRACE_CTF
         traceOutputEvent(paEO, paECET);
-#endif
-
+#endif // FORTE_TRACE_CTF
         size_t numEOs = getFBInterfaceSpec().getNumEOs();
         if (paEO < numEOs) {
           writeOutputData(paEO);
+          getEOConUnchecked(static_cast<TPortId>(paEO))->triggerEvent(paECET);
 
-#ifdef FORTE_EET_MONITORING
-          // EET: record end timestamp.
-          // FET: cancel countdown — FB finished in time.
-          // Both happen before triggerEvent so the measurement window closes when
-          // output data is ready, not after downstream FBs have been queued.
-          CEETMonitor::getInstance().endMeasurement(getInstanceNameId().data());
-#endif
-
-          FORTE_TRACE("OutputEvent: Function Block (%s) sending event: %d (maxid: %d)\n", getInstanceNameId().data(),
-                      paEO, getFBInterfaceSpec().getNumEOs() - 1);
-
-#ifdef FORTE_FET_ENFORCEMENT
-          const bool withinDeadline = CFETMonitor::getInstance().waitUntilDeadline(getInstanceNameId().data());
-          // Enforcement Mechanism
-          if (withinDeadline) {
-#endif
-            getEOConUnchecked(static_cast<TPortId>(paEO))->triggerEvent(paECET);
-#ifdef FORTE_FET_ENFORCEMENT
-          }
-#endif
+          // Count Event for monitoring, use size and number of EOs for performance reason so that only one value has to
+          // be gathered from the interface spec
           mEventMonitorCount[mEventMonitorCount.size() - numEOs + paEO]++;
         }
       }

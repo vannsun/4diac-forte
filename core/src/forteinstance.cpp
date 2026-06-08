@@ -24,7 +24,6 @@
 static void onSignal(int) {
   CEETMonitor::getInstance().stopPeriodicExport();
   CEETMonitor::getInstance().exportAllCSV("eet_results");
-  CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
   std::exit(0);
 }
 #endif
@@ -35,7 +34,6 @@ namespace forte {
 #ifdef FORTE_EET_MONITORING
       CEETMonitor::getInstance().stopPeriodicExport();
       CEETMonitor::getInstance().exportAllCSV("eet_results");
-      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
 #endif
       mActiveDevice->deinitialize();
     }
@@ -52,7 +50,6 @@ namespace forte {
 
       // Flush whatever samples the last periodic export did not yet capture.
       CEETMonitor::getInstance().exportAllCSV("eet_results");
-      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
 #endif
 
       // we have a current active device stop it
@@ -66,21 +63,13 @@ namespace forte {
       mActiveDevice->startDevice();
 
 #ifdef FORTE_EET_MONITORING
-      // Start periodic CSV export after the device is running so there are
-      // FBs already producing measurements before the first export fires.
-      // Interval: 10 s — adjust as needed for the evaluation setup.
-      // paTargetSamples: defaults to 0 = run inde
-
-      // Scenario 1:
-      // CEETMonitor::getInstance().startPeriodicExport("eet_results", std::chrono::seconds(60), 5000);
-      // Scenario 2:
       std::signal(SIGINT, onSignal);
       std::signal(SIGTERM, onSignal);
       CEETMonitor::getInstance().mDefaultStrategy = CEETMonitor::DeadlineStrategy::P90;
       CEETMonitor::getInstance().mDeadlineMultiplier = 1.2;
-      // CEETMonitor::getInstance().startPeriodicExport("eet_results", std::chrono::seconds(120), 1000);
-      // Every 7 minutes the export will take place until 3000 TargetSamples
-      CEETMonitor::getInstance().startPeriodicExport("eet_results", "eet_results_enforced", std::chrono::seconds(400), 3000);
+      CEETMonitor::getInstance().startPeriodicExport("eet_results", "eet_results_enforced",
+                                                     std::chrono::seconds(30), // export every 30s as safety net
+                                                     4000); // stop when 4000 samples reached
 #endif
     }
     return mActiveDevice.operator bool();
@@ -88,11 +77,6 @@ namespace forte {
 
   void C4diacFORTEInstance::triggerDeviceShutdown() {
     if (mActiveDevice) {
-#ifdef FORTE_EET_MONITORING
-      CEETMonitor::getInstance().stopPeriodicExport();
-      CEETMonitor::getInstance().exportAllCSV("eet_results");
-      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
-#endif
       mActiveDevice->changeExecutionState(EMGMCommandType::Kill);
     }
   }
