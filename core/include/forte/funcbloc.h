@@ -237,7 +237,8 @@ namespace forte {
           }
 #ifdef FORTE_EET_MONITORING
           // EET: start timestamp for this execution.
-          CEETMonitor::getInstance().startMeasurement(getInstanceNameId().data());
+          const auto startTime = std::chrono::high_resolution_clock::now();
+          CEETMonitor::getInstance().startMeasurement(getInstanceNameId().data(), startTime);
 #endif
           executeEvent(paEIID, paExecEnv);
           if (mForces.any()) [[unlikely]] {

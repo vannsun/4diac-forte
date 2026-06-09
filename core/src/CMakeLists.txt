@@ -49,7 +49,6 @@ target_sources(forte-core PRIVATE
         funcbloc.cpp
         eetmonitor.cpp
         fetmonitor.cpp
-        fetconfig.cpp
         gatherdataconn.cpp
         gatherdataconn.h
         inoutdataconn.cpp

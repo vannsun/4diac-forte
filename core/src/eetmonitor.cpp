@@ -15,6 +15,7 @@
 #include <fstream>
 #include "forte/eetconfig.h"
 #include "forte/eetmonitor.h"
+#include "forte/fetmonitor.h"
 #include "forte/util/devlog.h"
 
 static const char *deadlineStrategyToString(CEETMonitor::DeadlineStrategy strategy) {
@@ -26,13 +27,12 @@ static const char *deadlineStrategyToString(CEETMonitor::DeadlineStrategy strate
   }
 }
 
-void CEETMonitor::startMeasurement(TStringId paFBId) {
+void CEETMonitor::startMeasurementAt(TStringId paFBId, Clock::time_point paStartTime) {
   if (forte::eet::isMonitoringExcluded(paFBId))
     return;
   std::lock_guard<std::mutex> lock(mMutex);
 
-  const auto now = Clock::now();
-  mStartTimes[paFBId] = now;
+  mStartTimes[paFBId] = paStartTime;
 }
 
 void CEETMonitor::endMeasurement(TStringId paFBId) {
@@ -125,7 +125,7 @@ double CEETMonitor::getStdDev(TStringId paFBId) const {
 }
 
 long long CEETMonitor::get90thPercentile(TStringId paFBId) const {
-  auto durations = getDurationsCopy(paFBId); // copy — we sort it
+  auto durations = getDurationsCopy(paFBId);
   if (durations.empty())
     return 0;
   std::sort(durations.begin(), durations.end());
@@ -160,7 +160,7 @@ void CEETMonitor::activateFET(TStringId paFBId, DeadlineStrategy strategy) {
   {
     std::lock_guard<std::mutex> lock(mMutex);
 
-    // Already activated — do not re-register.
+    // Already activated - do not re-register.
     auto activatedIt = mFETActivated.find(paFBId);
     if (activatedIt != mFETActivated.end() && activatedIt->second.active)
       return;
@@ -174,16 +174,17 @@ void CEETMonitor::activateFET(TStringId paFBId, DeadlineStrategy strategy) {
     mFETActivated[paFBId].active = true;
   }
 
-  // Compute deadline outside lock — stat helpers take their own lock.
+  // Compute deadline outside lock - stat helpers take their own lock.
   const long long deadlineNs = getDeadlineSuggestion(paFBId, strategy);
   if (deadlineNs <= 0)
     return;
-
-  // Store deadline in FETState — single map, no mConfiguredDeadlines needed.
   {
     std::lock_guard<std::mutex> lock(mMutex);
     mFETActivated[paFBId].deadlineNs = deadlineNs;
   }
+
+  CFETMonitor::getInstance().registerFB(paFBId, std::chrono::nanoseconds(deadlineNs),
+                                        [](TStringId paId) { DEVLOG_ERROR("FET deadline missed: %s\n", paId); });
 
   DEVLOG_INFO("EET-FET: activated deadline %lldns for '%s' after %zu warmup samples using strategy %s\n", deadlineNs,
               paFBId, static_cast<size_t>(WARMUP_SAMPLES), deadlineStrategyToString(strategy));
@@ -270,7 +271,7 @@ void CEETMonitor::startPeriodicExport(const std::string &paDirectory,
 
         if (allDone) {
           exportAllCSV(paDirectory);
-          DEVLOG_INFO("EETMonitor: target of %zu samples reached — stopping.\n", paTargetSamples);
+          DEVLOG_INFO("EETMonitor: target of %zu samples reached - stopping.\n", paTargetSamples);
           mExportRunning = false;
           break;
         }

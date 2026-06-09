@@ -29,11 +29,14 @@ using TStringId = const char *;
  */
 class CEETMonitor {
   public:
+    /*! \brief Monotonic clock used for all EET timestamps. */
+    using Clock = std::chrono::steady_clock;
+
     /*! \brief Strategy used to compute the deadline suggestion from collected samples.
      *
-     *  MAX             — observed worst case (WCET)
-     *  P90             — 90th percentile, ignores outliers
-     *  MEAN_PLUS_3SIG  — mean + 3*stddev statistically ~99.7% coverage
+     *  MAX             - observed worst case (WCET)
+     *  P90             - 90th percentile, ignores outliers
+     *  MEAN_PLUS_3SIG  - mean + 3*stddev statistically ~99.7% coverage
      */
     enum class DeadlineStrategy { MAX, P90, MEAN_PLUS_3SIG };
 
@@ -92,9 +95,10 @@ class CEETMonitor {
     /*! \brief Start timing for a Function Block's execution.
      *
      * Called when a triggering input event arrives (receiveInputEvent).
-     * \param paFBId The FB's instance name ID.
+     * \param paFBId  The FB's instance name ID.
+     * \param paStartTime  Timestamp captured at input event arrival.
      */
-    void startMeasurement(TStringId paFBId);
+    void startMeasurementAt(TStringId paFBId, Clock::time_point paStartTime);
 
     /*! \brief End timing for a Function Block's after enforcement.
      *
@@ -161,8 +165,8 @@ class CEETMonitor {
      * Called automatically from receiveInputEvent after WARMUP_SAMPLES have been
      * collected. Can also be called manually at any time after warmup.
      *
-     * The deadline is computed using the chosen strategy, stored via
-     * setConfiguredDeadline(), and passed directly to CFETMonitor::registerFB().
+     * The deadline is computed using the chosen strategy, stored in
+     * mFETActivated[], and passed directly to CFETMonitor::registerFB().
      * From this point forward FET enforces the deadline for this FB.
      *
      * No-op if fewer than WARMUP_SAMPLES have been collected.
@@ -216,9 +220,6 @@ class CEETMonitor {
      * Returns an empty vector if paFBId is not found.
      */
     std::vector<long long> getDurationsCopy(TStringId paFBId) const;
-
-    /*! \brief Monotonic high-resolution clock used for all EET timestamps. */
-    using Clock = std::chrono::high_resolution_clock;
 
     /*! \brief Protects all mutable state against concurrent access from
      *  the ECET thread and the periodic export thread. (mSamples, mStartTimes)

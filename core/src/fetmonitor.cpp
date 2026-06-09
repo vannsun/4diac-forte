@@ -1,54 +1,40 @@
+/*******************************************************************************
+ * Copyright (c) 2026 Carl von Ossietzky Oldenburg University, OFFIS
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * http://www.eclipse.org/legal/epl-2.0.
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *
+ * Contributors:
+ *    Vannessa Cañon Pasquel - Initial implementation
+ *******************************************************************************/
+
 #include "forte/fetmonitor.h"
 #include "forte/util/devlog.h"
 
 #include <thread>
 
-// ─────────────────────────────────────────────────────────────────────────────
-// registerFB
-// ─────────────────────────────────────────────────────────────────────────────
-
-void CFETMonitor::registerFB(TStringId paFBId,
-                             std::chrono::nanoseconds paDeadline,
-                             FETErrorCallback paCallback,
-                             std::function<void()> paOnEnforced) {
+void CFETMonitor::registerFB(TStringId paFBId, std::chrono::nanoseconds paDeadline, FETErrorCallback paCallback) {
   std::lock_guard<std::mutex> lock(mMutex);
   auto &state = mStates[paFBId];
   state.deadline = paDeadline;
   state.callback = paCallback;
-  state.onEnforced = paOnEnforced;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// startMeasurement
-// Called from receiveInputEvent, before executeEvent.
-// ─────────────────────────────────────────────────────────────────────────────
-
-void CFETMonitor::startMeasurement(TStringId paFBId) {
-  // Capture time before the lock to minimise hot-path overhead.
-  const auto now = Clock::now();
-
+void CFETMonitor::startMeasurementAt(TStringId paFBId, TimePoint paStartTime) {
   std::lock_guard<std::mutex> lock(mMutex);
   auto it = mStates.find(paFBId);
   if (it == mStates.end()) {
-    return; // Not registered — nothing to do.
+    return; // Not registered
   }
-  it->second.startTime = now;
+
+  it->second.startTime = paStartTime;
   it->second.active = true;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// waitUntilDeadline
-//
-// Called from sendOutputEvent, AFTER writeOutputData and EET.endMeasurement,
-// BEFORE triggerEvent.
-//
-//   elapsed <= deadline  → sleep(deadline − elapsed); return true
-//   elapsed >  deadline  → fire callback; return false
-//   not registered       → return true  (unmonitored FBs unaffected)
-//   not active           → return true  (no matching startMeasurement)
-// ─────────────────────────────────────────────────────────────────────────────
-
-bool CFETMonitor::waitUntilDeadline(TStringId paFBId) {
+long long CFETMonitor::waitUntilDeadline(TStringId paFBId) {
   const auto endTime = Clock::now();
 
   FBState stateCopy;
@@ -56,13 +42,13 @@ bool CFETMonitor::waitUntilDeadline(TStringId paFBId) {
     std::lock_guard<std::mutex> lock(mMutex);
     auto it = mStates.find(paFBId);
     if (it == mStates.end())
-      return true;
+      return true; // FB not registered.
     FBState &state = it->second;
     if (!state.active)
-      return true;
+      return true; // No active timing session.
     stateCopy = state;
-    state.active = false;
-  }
+    state.active = false; // Measurement completed
+  } // Lock is released.
 
   const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - stateCopy.startTime);
 
@@ -74,31 +60,17 @@ bool CFETMonitor::waitUntilDeadline(TStringId paFBId) {
 
     if (stateCopy.callback)
       stateCopy.callback(paFBId);
-    if (stateCopy.onEnforced)
-      stateCopy.onEnforced(); // ← record violation
     return false;
   }
 
   const auto remaining = stateCopy.deadline - elapsed;
   std::this_thread::sleep_for(remaining);
 
-  if (stateCopy.onEnforced)
-    stateCopy.onEnforced(); // ← record after sleep
-  return true;
-} // ─────────────────────────────────────────────────────────────────────────────
-// unregisterFB
-// ─────────────────────────────────────────────────────────────────────────────
+  const auto enforcedEndTime = Clock::now();
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(enforcedEndTime - stateCopy.startTime).count();
+}
 
 void CFETMonitor::unregisterFB(TStringId paFBId) {
   std::lock_guard<std::mutex> lock(mMutex);
   mStates.erase(paFBId);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// clearAll
-// ─────────────────────────────────────────────────────────────────────────────
-
-void CFETMonitor::clearAll() {
-  std::lock_guard<std::mutex> lock(mMutex);
-  mStates.clear();
 }
