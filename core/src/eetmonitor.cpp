@@ -35,41 +35,39 @@ void CEETMonitor::startMeasurementAt(TStringId paFBId, Clock::time_point paStart
   mStartTimes[paFBId] = paStartTime;
 }
 
-void CEETMonitor::endMeasurement(TStringId paFBId) {
+long long CEETMonitor::endMeasurement(TStringId paFBId) {
   if (forte::eet::isMonitoringExcluded(paFBId))
-    return;
-  const auto endTime = Clock::now();
+    return 0;
 
+  const auto endTime = Clock::now();
   bool shouldActivate = false;
-  Sample s;
+  long long durationNs = 0;
+
   {
     std::lock_guard<std::mutex> lock(mMutex);
 
     auto startIt = mStartTimes.find(paFBId);
     if (startIt == mStartTimes.end())
-      return;
+      return 0;
 
-    const long long durationNs =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - startIt->second).count();
+    durationNs = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - startIt->second).count();
 
-    // Read FET state before deciding whether to erase start time.
     auto fetIt = mFETActivated.find(paFBId);
     const bool fetActive = (fetIt != mFETActivated.end() && fetIt->second.active);
     const long long deadlineNs = fetActive ? fetIt->second.deadlineNs : 0;
 
-    // Only erase when FET is NOT active.
-    // the same start time to measure execution + padding duration.
-    if (!fetActive) {
-      mStartTimes.erase(startIt);
-    }
+    // if (!fetActive) {
+    mStartTimes.erase(startIt);
+    //}
 
     if (durationNs <= 0)
-      return;
+      return 0;
 
     const size_t warmupCount = ++mWarmupCount[paFBId];
 
     const ExecutionPhase phase = fetActive ? ExecutionPhase::FET_ACTIVE : ExecutionPhase::WARMUP;
 
+    Sample s;
     s.durationNs = durationNs;
     s.timestampNs = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime.time_since_epoch()).count();
     s.deadlineNs = deadlineNs;
@@ -78,9 +76,8 @@ void CEETMonitor::endMeasurement(TStringId paFBId) {
     s.phase = phase;
 
     auto &samples = mSamples[paFBId];
-    if (samples.size() >= MAX_SAMPLES) {
+    if (samples.size() >= MAX_SAMPLES)
       samples.erase(samples.begin());
-    }
     samples.push_back(s);
 
     if (!fetActive) {
@@ -91,9 +88,11 @@ void CEETMonitor::endMeasurement(TStringId paFBId) {
   if (shouldActivate) {
     activateFET(paFBId, mDefaultStrategy);
   }
+
+  return durationNs;
 }
 
-void CEETMonitor::recordEnforcedSample(TStringId paFBId, long long paEnforcedNs) {
+void CEETMonitor::recordEnforcedSample(TStringId paFBId, long long paEnforcedNs, long long paRawNs) {
   if (forte::eet::isMonitoringExcluded(paFBId))
     return;
   std::lock_guard<std::mutex> lock(mMutex);
@@ -107,6 +106,7 @@ void CEETMonitor::recordEnforcedSample(TStringId paFBId, long long paEnforcedNs)
   s.timestampNs = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
   s.deadlineNs = deadlineNs;
   s.fetActive = fetActive;
+  s.rawNs = paRawNs;
   s.deadlineMiss = fetActive && deadlineNs > 0 && paEnforcedNs > deadlineNs;
   s.phase = ExecutionPhase::ENFORCED; // distinguishes from FET_ACTIVE set in endMeasurement()
 
@@ -179,6 +179,23 @@ long long CEETMonitor::getDeadlineSuggestion(TStringId paFBId, DeadlineStrategy 
   return 0;
 }
 
+long long CEETMonitor::getSleepTarget(TStringId paFBId, DeadlineStrategy strategy) const {
+  switch (strategy) {
+    case DeadlineStrategy::P90:
+      // Sleep to P90, leaving the ×1.2 headroom for OS timer overshoot
+      return get90thPercentile(paFBId);
+
+    case DeadlineStrategy::MEAN_PLUS_3SIG:
+      // Sleep to mean + 2*sigma, leaving 1 sigma as headroom
+      return static_cast<long long>(getMean(paFBId) + 2.0 * getStdDev(paFBId));
+
+    case DeadlineStrategy::MAX:
+      // No headroom concept for MAX — sleep target equals deadline
+      return getMax(paFBId);
+  }
+  return 0;
+}
+
 void CEETMonitor::activateFET(TStringId paFBId, DeadlineStrategy strategy) {
   {
     std::lock_guard<std::mutex> lock(mMutex);
@@ -199,6 +216,7 @@ void CEETMonitor::activateFET(TStringId paFBId, DeadlineStrategy strategy) {
 
   // Compute deadline outside lock - stat helpers take their own lock.
   const long long deadlineNs = getDeadlineSuggestion(paFBId, strategy);
+  const long long sleepTargetNs = getSleepTarget(paFBId, strategy);
   if (deadlineNs <= 0)
     return;
   {
@@ -207,6 +225,7 @@ void CEETMonitor::activateFET(TStringId paFBId, DeadlineStrategy strategy) {
   }
 
   CFETMonitor::getInstance().registerFB(paFBId, std::chrono::nanoseconds(deadlineNs),
+                                        std::chrono::nanoseconds(sleepTargetNs),
                                         [](TStringId paId) { DEVLOG_ERROR("FET deadline missed: %s\n", paId); });
 
   DEVLOG_INFO("EET-FET: activated deadline %lldns for '%s' after %zu warmup samples using strategy %s\n", deadlineNs,
@@ -239,10 +258,10 @@ void CEETMonitor::exportAllCSV(const std::string &paDirectory) const {
     if (!file.is_open())
       continue;
 
-    file << "timestamp_ns,execution_ns,deadline_ns,deadline_miss,fet_active,phase\n";
+    file << "timestamp_ns,execution_ns,raw_ns,deadline_ns,deadline_miss,fet_active,phase\n";
     for (const auto &s : samples) {
-      file << s.timestampNs << "," << s.durationNs << "," << s.deadlineNs << "," << (s.deadlineMiss ? 1 : 0) << ","
-           << (s.fetActive ? 1 : 0) << "," << static_cast<int>(s.phase) << "\n";
+      file << s.timestampNs << "," << s.durationNs << "," << s.rawNs << "," << s.deadlineNs << ","
+           << (s.deadlineMiss ? 1 : 0) << "," << (s.fetActive ? 1 : 0) << "," << static_cast<int>(s.phase) << "\n";
     }
     DEVLOG_INFO("EETMonitor: exported %zu samples for '%s'\n", samples.size(), fbId);
   }
@@ -261,10 +280,10 @@ void CEETMonitor::exportAllCSVEnforced(const std::string &paDirectory) const {
     std::ofstream file(filename);
     if (!file.is_open())
       continue;
-    file << "timestamp_ns,execution_ns,deadline_ns,deadline_miss,fet_active,phase\n";
+    file << "timestamp_ns,execution_ns,raw_ns,deadline_ns,deadline_miss,fet_active,phase\n";
     for (const auto &s : samples) {
-      file << s.timestampNs << "," << s.durationNs << "," << s.deadlineNs << "," << (s.deadlineMiss ? 1 : 0) << ","
-           << (s.fetActive ? 1 : 0) << "," << static_cast<int>(s.phase) << "\n";
+      file << s.timestampNs << "," << s.durationNs << "," << s.rawNs << "," << s.deadlineNs << ","
+           << (s.deadlineMiss ? 1 : 0) << "," << (s.fetActive ? 1 : 0) << "," << static_cast<int>(s.phase) << "\n";
     }
     DEVLOG_INFO("EETMonitor: exported %zu enforced samples for '%s'\n", samples.size(), fbId);
   }

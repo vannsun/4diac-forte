@@ -16,10 +16,14 @@
 
 #include <thread>
 
-void CFETMonitor::registerFB(TStringId paFBId, std::chrono::nanoseconds paDeadline, FETErrorCallback paCallback) {
+void CFETMonitor::registerFB(TStringId paFBId,
+                             std::chrono::nanoseconds paDeadline,
+                             std::chrono::nanoseconds paSleepTarget,
+                             FETErrorCallback paCallback) {
   std::lock_guard<std::mutex> lock(mMutex);
   auto &state = mStates[paFBId];
   state.deadline = paDeadline;
+  state.sleepTarget = paSleepTarget;
   state.callback = paCallback;
 }
 
@@ -33,6 +37,38 @@ void CFETMonitor::startMeasurementAt(TStringId paFBId, TimePoint paStartTime) {
   it->second.startTime = paStartTime;
   it->second.active = true;
 }
+
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+
+static void preciseSleep(std::chrono::nanoseconds duration) {
+  if (duration.count() <= 0)
+    return;
+
+  // For durations > 1ms use Windows sleep with high resolution timer
+  timeBeginPeriod(1);
+
+  const auto deadline = std::chrono::steady_clock::now() + duration;
+
+  // Sleep most of the duration
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+  if (ms > 1) {
+    Sleep(static_cast<DWORD>(ms - 1));
+  }
+
+  // Busy-wait for the remainder
+  while (std::chrono::steady_clock::now() < deadline) {
+    // spin
+  }
+
+  timeBeginPeriod(1); // restore — actually should call timeEndPeriod
+}
+#else
+static void preciseSleep(std::chrono::nanoseconds duration) {
+  std::this_thread::sleep_for(duration);
+}
+#endif
 
 long long CFETMonitor::waitUntilDeadline(TStringId paFBId) {
   const auto endTime = Clock::now();
@@ -65,8 +101,13 @@ long long CFETMonitor::waitUntilDeadline(TStringId paFBId) {
     return -1;
   }
 
-  const auto remaining = stateCopy.deadline - elapsed;
-  std::this_thread::sleep_for(remaining);
+  // const auto remaining = stateCopy.deadline - elapsed;
+  //  std::this_thread::sleep_for(remaining);
+  // preciseSleep(remaining);
+  const auto remaining = stateCopy.sleepTarget - elapsed;
+  if (remaining.count() > 0) {
+    preciseSleep(remaining);
+  }
 
   const auto enforcedEndTime = Clock::now(); // Timestamp after sleep
   const long long enforced =

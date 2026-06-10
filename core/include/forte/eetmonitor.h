@@ -87,8 +87,9 @@ class CEETMonitor {
         long long durationNs; ///< Measured execution time in nanoseconds
         long long timestampNs; ///< Wall-clock timestamp at end of measurement
         long long rawDurationNs; ///< Execution time before enforcement
-        long long deadlineNs; ///< Registered FET deadline at time of measurement (0 if not yet activated).
-                              ///< Final enforced duration.
+        long long deadlineNs; ///< Registered FET deadline at time of measurement (0 if not yet activated). Final
+                              ///< enforced duration.
+        long long rawNs{0}; // raw algorithm dispatch time — only meaningful for ENFORCED phase
         bool fetActive; ///< True if FET was active when this sample was recorded
         bool deadlineMiss; ///< True if durationNs exceeded deadlineNs
         ExecutionPhase phase; ///< Warmup, enforcement-active, or enforced (post-sleep)
@@ -107,7 +108,7 @@ class CEETMonitor {
      *  or FET_ACTIVE sample. Triggers FET activation once WARMUP_SAMPLES
      *  have been collected. Called from sendOutputEvent before waitUntilDeadline.
      *  \param paFBId The FB's instance name ID. */
-    void endMeasurement(TStringId paFBId);
+    long long endMeasurement(TStringId paFBId); // returns raw duration
 
     /*! \brief Records a post-enforcement sample for a FB.
      *  Stores the total duration including FET padding sleep as an ENFORCED
@@ -115,8 +116,9 @@ class CEETMonitor {
      *  Called from sendOutputEvent after waitUntilDeadline returns.
      *  \param paFBId       The FB's instance name ID.
      *  \param paEnforcedNs Total enforced duration in nanoseconds
-     *                      (algorithm time + FET sleep). */
-    void recordEnforcedSample(TStringId paFBId, long long paEnforcedNs);
+     *                      (algorithm time + FET sleep).
+     * \param paRawNs Total raw duration in nanoseconds. */
+    void recordEnforcedSample(TStringId paFBId, long long paEnforcedNs, long long paRawNs);
 
     /*! \brief Get the stored duration samples (nanoseconds) for a FB.
      *
@@ -169,6 +171,21 @@ class CEETMonitor {
      * \return Suggested deadline in nanoseconds.
      */
     long long getDeadlineSuggestion(TStringId paFBId, DeadlineStrategy strategy) const;
+
+    /*! \brief Compute the sleep target for FET enforcement based on collected samples.
+     *
+     * Returns the duration FET should sleep to in waitUntilDeadline(), leaving
+     * headroom between the sleep target and the full deadline to absorb OS timer
+     * overshoot:
+     *   - P90 :            sleep to P90, deadline is P90 × multiplier
+     *   - MEAN_PLUS_3SIG : sleep to mean + 2σ, deadline is mean + 3σ
+     *   - MAX :            sleep target equals deadline (no headroom)
+     *
+     * \param paFBId    The FB's instance name ID.
+     * \param strategy  The deadline strategy in use.
+     * \return Sleep target in nanoseconds, or 0 if insufficient data.
+     */
+    long long getSleepTarget(TStringId paFBId, DeadlineStrategy strategy) const;
 
     /*! \brief Compute deadline from EET data and register the FB with CFETMonitor.
      *

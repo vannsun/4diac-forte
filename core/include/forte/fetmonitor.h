@@ -43,11 +43,19 @@ class CFETMonitor {
     /*! \brief Register an FB for deadline enforcement.
      *
      * Called by CEETMonitor::activateFET() after warmup completes.
-     * 
-     * Sets the deadline and error callback for this FB.
-     * Safe to call again to update deadline or callback.
+     * Sets the deadline, sleep target, and error callback for this FB.
+     *
+     * \param paFBId        FB instance name ID.
+     * \param paDeadline    Maximum allowed execution time — deadline missed threshold.
+     * \param paSleepTarget Duration to sleep to in waitUntilDeadline(). Must be
+     *                      less than paDeadline to leave headroom for OS timer
+     *                      overshoot. Computed by CEETMonitor::getSleepTarget().
+     * \param paCallback    Called on the timer thread if the deadline is missed.
      */
-    void registerFB(TStringId paFBId, std::chrono::nanoseconds paDeadline, FETErrorCallback paCallback);
+    void registerFB(TStringId paFBId,
+                    std::chrono::nanoseconds paDeadline,
+                    std::chrono::nanoseconds paSleepTarget,
+                    FETErrorCallback paCallback);
 
     /*! \brief Record execution start timestamp for a monitored FB.
      *
@@ -62,13 +70,13 @@ class CFETMonitor {
      * Called from sendOutputEvent after writeOutputData.
      *
      * Computes elapsed = now - startTime.
-     * 
+     *
      * If elapsed < deadline: sleeps for remaining time, returns true.
-     * 
+     *
      * If elapsed > deadline: fires error callback, returns false.
-     * 
+     *
      * Returns enforced duration in ns (> 0), (0) on FB not registered or no active session, or (-1) on deadline missed.
-     * 
+     *
      * Returning -1 suppresses triggerEvent - output event is not fired.
      */
     long long waitUntilDeadline(TStringId paFBId);
@@ -87,6 +95,7 @@ class CFETMonitor {
     /*! \brief Per-FB enforcement state. */
     struct FBState {
         std::chrono::nanoseconds deadline{0}; //!< Maximum allowed execution time.
+        std::chrono::nanoseconds sleepTarget{0}; //!< Actual sleep target without deadline multiplier.
         FETErrorCallback callback; //!< Called when deadline is missed.
         TimePoint startTime{}; //!< Recorded by startMeasurementAt().
         bool active{false}; //!< True while a measurement is in progress.

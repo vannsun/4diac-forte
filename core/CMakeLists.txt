@@ -15,6 +15,10 @@
 add_library(forte-core)
 
 ## BEGIN - Enforcement definition
+if(WIN32)
+  target_link_libraries(forte-core PRIVATE winmm)
+endif()
+
 option(FORTE_TRACE_EVENTS "FORTE will log the events received at and sent from function blocks" OFF)
 if(FORTE_TRACE_EVENTS)
   target_compile_definitions(forte-core PUBLIC FORTE_TRACE_EVENTS)
