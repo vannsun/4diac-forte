@@ -84,15 +84,16 @@ class CEETMonitor {
 
     /*! \brief Single EET measurement sample with metadata. */
     struct Sample {
-        long long durationNs; ///< Measured execution time in nanoseconds
-        long long timestampNs; ///< Wall-clock timestamp at end of measurement
-        long long rawDurationNs; ///< Execution time before enforcement
-        long long deadlineNs; ///< Registered FET deadline at time of measurement (0 if not yet activated). Final
-                              ///< enforced duration.
-        long long rawNs{0}; // raw algorithm dispatch time — only meaningful for ENFORCED phase
-        bool fetActive; ///< True if FET was active when this sample was recorded
-        bool deadlineMiss; ///< True if durationNs exceeded deadlineNs
-        ExecutionPhase phase; ///< Warmup, enforcement-active, or enforced (post-sleep)
+        size_t sampleId{0}; ///< ID
+        long long rawNs{0}; ///< Raw execution time
+        long long enforcedNs{0}; ///< Enforced duration after sleep — 0 if FET not active
+        long long timestampNs{0}; ///< Wall-clock timestamp at end of measurement
+        long long deadlineNs{0}; ///< Registered FET deadline at time of measurement (0 if not yet activated). Final
+        ///< enforced duration.
+        long long sleepTargetNs{0}; ///< Sleep target
+        bool fetActive{false}; ///< True if FET was active when this sample was recorded
+        bool deadlineMiss{false}; ///< True if durationNs exceeded deadlineNs
+        ExecutionPhase phase{ExecutionPhase::WARMUP}; ///< Warmup, enforcement-active, or enforced (post-sleep)
     };
 
     /*! \brief Start timing for a Function Block's execution.
@@ -108,17 +109,18 @@ class CEETMonitor {
      *  or FET_ACTIVE sample. Triggers FET activation once WARMUP_SAMPLES
      *  have been collected. Called from sendOutputEvent before waitUntilDeadline.
      *  \param paFBId The FB's instance name ID. */
-    long long endMeasurement(TStringId paFBId); // returns raw duration
+    std::pair<long long, size_t> endMeasurement(TStringId paFBId); // returns raw duration and sample ID
 
     /*! \brief Records a post-enforcement sample for a FB.
      *  Stores the total duration including FET padding sleep as an ENFORCED
      *  sample. On FET active and enforcement these values should cluster at the deadline.
      *  Called from sendOutputEvent after waitUntilDeadline returns.
-     *  \param paFBId       The FB's instance name ID.
-     *  \param paEnforcedNs Total enforced duration in nanoseconds
-     *                      (algorithm time + FET sleep).
-     * \param paRawNs Total raw duration in nanoseconds. */
-    void recordEnforcedSample(TStringId paFBId, long long paEnforcedNs, long long paRawNs);
+     * \param paFBId       The FB's instance name ID.
+     * \param paEnforcedNs Total duration including FET sleep (execution + padding).
+     * \param paRawNs      Raw execution time before sleep — used for deadline_miss.
+     * \param paSampleId   Sample counter value from the matching endMeasurement call.
+     */
+    void recordEnforcedSample(TStringId paFBId, long long paEnforcedNs, long long paRawNs, size_t paSampleId);
 
     /*! \brief Get the stored duration samples (nanoseconds) for a FB.
      *
@@ -279,6 +281,7 @@ class CEETMonitor {
     struct FETState {
         bool active = false;
         long long deadlineNs = 0;
+        long long sleepTargetNs{0};
     };
     std::map<TStringId, FETState> mFETActivated;
 
@@ -294,6 +297,9 @@ class CEETMonitor {
     /*! \brief True while the export thread is running. Set to false to
      *  request graceful shutdown; stopPeriodicExport() blocks until exit. */
     std::atomic<bool> mExportRunning{false};
+
+    /*! \brief Incremental ID */
+    std::map<TStringId, size_t> mSampleCounter;
     // #endif
 };
 

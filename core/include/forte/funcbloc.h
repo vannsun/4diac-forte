@@ -427,8 +427,8 @@ namespace forte {
           writeOutputData(paEO);
 
 #ifdef FORTE_EET_MONITORING
-          // EET: record end timestamp.
-          const long long rawNs = CEETMonitor::getInstance().endMeasurement(getInstanceNameId().data());
+          // EET: record end raw timestamp and returns the sample counter.
+          const auto [rawNs, sampleId] = CEETMonitor::getInstance().endMeasurement(getInstanceNameId().data());
 #endif
 
 #ifdef FORTE_FET_ENFORCEMENT
@@ -437,7 +437,7 @@ namespace forte {
           // #ifdef FORTE_EET_EVALUATION
           // Only record samples when enforcement actually happened.
           if (enforcedNs > 0) {
-            CEETMonitor::getInstance().recordEnforcedSample(getInstanceNameId().data(), enforcedNs, rawNs);
+            CEETMonitor::getInstance().recordEnforcedSample(getInstanceNameId().data(), enforcedNs, rawNs, sampleId);
           }
           // #endif
 

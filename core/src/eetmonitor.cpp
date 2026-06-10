@@ -35,20 +35,21 @@ void CEETMonitor::startMeasurementAt(TStringId paFBId, Clock::time_point paStart
   mStartTimes[paFBId] = paStartTime;
 }
 
-long long CEETMonitor::endMeasurement(TStringId paFBId) {
+std::pair<long long, size_t> CEETMonitor::endMeasurement(TStringId paFBId) {
   if (forte::eet::isMonitoringExcluded(paFBId))
-    return 0;
+    return {0, 0};
 
   const auto endTime = Clock::now();
   bool shouldActivate = false;
   long long durationNs = 0;
+  size_t sampleId = 0;
 
   {
     std::lock_guard<std::mutex> lock(mMutex);
 
     auto startIt = mStartTimes.find(paFBId);
     if (startIt == mStartTimes.end())
-      return 0;
+      return {0, 0};
 
     durationNs = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime - startIt->second).count();
 
@@ -61,16 +62,21 @@ long long CEETMonitor::endMeasurement(TStringId paFBId) {
     //}
 
     if (durationNs <= 0)
-      return 0;
+      return {0, 0};
 
     const size_t warmupCount = ++mWarmupCount[paFBId];
+    sampleId = ++mSampleCounter[paFBId];
 
     const ExecutionPhase phase = fetActive ? ExecutionPhase::FET_ACTIVE : ExecutionPhase::WARMUP;
 
+    const long long sleepTargetNs = fetActive ? fetIt->second.sleepTargetNs : 0;
+
     Sample s;
-    s.durationNs = durationNs;
+    s.sampleId = sampleId;
+    s.rawNs = durationNs;
     s.timestampNs = std::chrono::duration_cast<std::chrono::nanoseconds>(endTime.time_since_epoch()).count();
     s.deadlineNs = deadlineNs;
+    s.sleepTargetNs = sleepTargetNs;
     s.fetActive = fetActive;
     s.deadlineMiss = fetActive && deadlineNs > 0 && durationNs > deadlineNs;
     s.phase = phase;
@@ -89,10 +95,10 @@ long long CEETMonitor::endMeasurement(TStringId paFBId) {
     activateFET(paFBId, mDefaultStrategy);
   }
 
-  return durationNs;
+  return {durationNs, sampleId};
 }
 
-void CEETMonitor::recordEnforcedSample(TStringId paFBId, long long paEnforcedNs, long long paRawNs) {
+void CEETMonitor::recordEnforcedSample(TStringId paFBId, long long paEnforcedNs, long long paRawNs, size_t paSampleId) {
   if (forte::eet::isMonitoringExcluded(paFBId))
     return;
   std::lock_guard<std::mutex> lock(mMutex);
@@ -100,13 +106,16 @@ void CEETMonitor::recordEnforcedSample(TStringId paFBId, long long paEnforcedNs,
   auto fetIt = mFETActivated.find(paFBId);
   const bool fetActive = (fetIt != mFETActivated.end() && fetIt->second.active);
   const long long deadlineNs = fetActive ? fetIt->second.deadlineNs : 0;
+  const long long sleepTargetNs = fetActive ? fetIt->second.sleepTargetNs : 0;
 
   Sample s;
-  s.durationNs = paEnforcedNs;
+  s.sampleId = paSampleId;
+  s.rawNs = paRawNs;
+  s.enforcedNs = paEnforcedNs;
   s.timestampNs = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
   s.deadlineNs = deadlineNs;
+  s.sleepTargetNs = sleepTargetNs;
   s.fetActive = fetActive;
-  s.rawNs = paRawNs;
   s.deadlineMiss = fetActive && deadlineNs > 0 && paEnforcedNs > deadlineNs;
   s.phase = ExecutionPhase::ENFORCED; // distinguishes from FET_ACTIVE set in endMeasurement()
 
@@ -222,6 +231,7 @@ void CEETMonitor::activateFET(TStringId paFBId, DeadlineStrategy strategy) {
   {
     std::lock_guard<std::mutex> lock(mMutex);
     mFETActivated[paFBId].deadlineNs = deadlineNs;
+    mFETActivated[paFBId].sleepTargetNs = sleepTargetNs;
   }
 
   CFETMonitor::getInstance().registerFB(paFBId, std::chrono::nanoseconds(deadlineNs),
@@ -258,10 +268,12 @@ void CEETMonitor::exportAllCSV(const std::string &paDirectory) const {
     if (!file.is_open())
       continue;
 
-    file << "timestamp_ns,execution_ns,raw_ns,deadline_ns,deadline_miss,fet_active,phase\n";
+    file << "sample_id,timestamp_ns,raw_ns,enforced_ns,sleep_target_ns,deadline_ns,deadline_miss,fet_active,phase\n";
+
     for (const auto &s : samples) {
-      file << s.timestampNs << "," << s.durationNs << "," << s.rawNs << "," << s.deadlineNs << ","
-           << (s.deadlineMiss ? 1 : 0) << "," << (s.fetActive ? 1 : 0) << "," << static_cast<int>(s.phase) << "\n";
+      file << s.sampleId << "," << s.timestampNs << "," << s.rawNs << "," << s.enforcedNs << "," << s.sleepTargetNs
+           << "," << s.deadlineNs << "," << (s.deadlineMiss ? 1 : 0) << "," << (s.fetActive ? 1 : 0) << ","
+           << static_cast<int>(s.phase) << "\n";
     }
     DEVLOG_INFO("EETMonitor: exported %zu samples for '%s'\n", samples.size(), fbId);
   }
@@ -280,10 +292,12 @@ void CEETMonitor::exportAllCSVEnforced(const std::string &paDirectory) const {
     std::ofstream file(filename);
     if (!file.is_open())
       continue;
-    file << "timestamp_ns,execution_ns,raw_ns,deadline_ns,deadline_miss,fet_active,phase\n";
+    file << "sample_id,timestamp_ns,raw_ns,enforced_ns,sleep_target_ns,deadline_ns,deadline_miss,fet_active,phase\n";
+
     for (const auto &s : samples) {
-      file << s.timestampNs << "," << s.durationNs << "," << s.rawNs << "," << s.deadlineNs << ","
-           << (s.deadlineMiss ? 1 : 0) << "," << (s.fetActive ? 1 : 0) << "," << static_cast<int>(s.phase) << "\n";
+      file << s.sampleId << "," << s.timestampNs << "," << s.rawNs << "," << s.enforcedNs << "," << s.sleepTargetNs
+           << "," << s.deadlineNs << "," << (s.deadlineMiss ? 1 : 0) << "," << (s.fetActive ? 1 : 0) << ","
+           << static_cast<int>(s.phase) << "\n";
     }
     DEVLOG_INFO("EETMonitor: exported %zu enforced samples for '%s'\n", samples.size(), fbId);
   }
@@ -371,7 +385,7 @@ std::vector<long long> CEETMonitor::getDurationsCopy(TStringId paFBId) const {
   std::vector<long long> result;
   result.reserve(it->second.size());
   for (const auto &s : it->second) {
-    result.push_back(s.durationNs);
+    result.push_back(s.rawNs);
   }
   return result;
 }
