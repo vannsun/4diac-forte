@@ -24,6 +24,7 @@
 static void onSignal(int) {
   CEETMonitor::getInstance().stopPeriodicExport();
   CEETMonitor::getInstance().exportAllCSV("eet_results");
+  CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
   std::exit(0);
 }
 #endif
@@ -34,6 +35,7 @@ namespace forte {
 #ifdef FORTE_EET_MONITORING
       CEETMonitor::getInstance().stopPeriodicExport();
       CEETMonitor::getInstance().exportAllCSV("eet_results");
+      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
 #endif
       mActiveDevice->deinitialize();
     }
@@ -44,12 +46,12 @@ namespace forte {
 #ifdef FORTE_EET_MONITORING
       // Stop the periodic export thread before tearing down the current
       // device. The export thread calls exportAllCSV which reads mSamples
-      // under its own lock — stopping it first avoids a race with clearAllData
-      // called during device teardown.
+      // under its own lock. Called during device teardown.
       CEETMonitor::getInstance().stopPeriodicExport();
 
       // Flush whatever samples the last periodic export did not yet capture.
       CEETMonitor::getInstance().exportAllCSV("eet_results");
+      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
 #endif
 
       // we have a current active device stop it
@@ -62,14 +64,13 @@ namespace forte {
       mActiveDevice->initialize();
       mActiveDevice->startDevice();
 
+      // TODO: Change flag for FORTE_EET_EVALUATION
 #ifdef FORTE_EET_MONITORING
       std::signal(SIGINT, onSignal);
       std::signal(SIGTERM, onSignal);
-      CEETMonitor::getInstance().mDefaultStrategy = CEETMonitor::DeadlineStrategy::P90;
-      CEETMonitor::getInstance().mDeadlineMultiplier = 1.2;
       CEETMonitor::getInstance().startPeriodicExport("eet_results", "eet_results_enforced",
                                                      std::chrono::seconds(30), // export every 30s as safety net
-                                                     4000); // stop when 4000 samples reached
+                                                     10000); // stop when 4000 samples reached
 #endif
     }
     return mActiveDevice.operator bool();

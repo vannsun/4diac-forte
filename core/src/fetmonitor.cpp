@@ -42,10 +42,12 @@ long long CFETMonitor::waitUntilDeadline(TStringId paFBId) {
     std::lock_guard<std::mutex> lock(mMutex);
     auto it = mStates.find(paFBId);
     if (it == mStates.end())
-      return true; // FB not registered.
+      return 0; // FB not registered, no enforcement.
+
     FBState &state = it->second;
     if (!state.active)
-      return true; // No active timing session.
+      return 0; // No active timing session, no enforcement.
+
     stateCopy = state;
     state.active = false; // Measurement completed
   } // Lock is released.
@@ -60,14 +62,19 @@ long long CFETMonitor::waitUntilDeadline(TStringId paFBId) {
 
     if (stateCopy.callback)
       stateCopy.callback(paFBId);
-    return false;
+    return -1;
   }
 
   const auto remaining = stateCopy.deadline - elapsed;
   std::this_thread::sleep_for(remaining);
 
-  const auto enforcedEndTime = Clock::now();
-  return std::chrono::duration_cast<std::chrono::nanoseconds>(enforcedEndTime - stateCopy.startTime).count();
+  const auto enforcedEndTime = Clock::now(); // Timestamp after sleep
+  const long long enforced =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(enforcedEndTime - stateCopy.startTime).count();
+
+  DEVLOG_INFO("FETMonitor: '%s' enforced=%lldns\n", paFBId, enforced);
+
+  return enforced;
 }
 
 void CFETMonitor::unregisterFB(TStringId paFBId) {

@@ -86,7 +86,9 @@ class CEETMonitor {
     struct Sample {
         long long durationNs; ///< Measured execution time in nanoseconds
         long long timestampNs; ///< Wall-clock timestamp at end of measurement
-        long long deadlineNs; ///< Registered FET deadline at time of measurement (0 if not yet activated)
+        long long rawDurationNs; ///< Execution time before enforcement
+        long long deadlineNs; ///< Registered FET deadline at time of measurement (0 if not yet activated).
+                              ///< Final enforced duration.
         bool fetActive; ///< True if FET was active when this sample was recorded
         bool deadlineMiss; ///< True if durationNs exceeded deadlineNs
         ExecutionPhase phase; ///< Warmup, enforcement-active, or enforced (post-sleep)
@@ -100,13 +102,21 @@ class CEETMonitor {
      */
     void startMeasurementAt(TStringId paFBId, Clock::time_point paStartTime);
 
-    /*! \brief End timing for a Function Block's after enforcement.
-     *
-     * Called when the FB produces an output event (sendOutputEvent).
-     *
-     * \param paFBId The FB's instance name ID.
-     */
+    /*! \brief Records the end of an EET measurement for a FB.
+     *  Computes the raw algorithm execution time and stores it as a WARMUP
+     *  or FET_ACTIVE sample. Triggers FET activation once WARMUP_SAMPLES
+     *  have been collected. Called from sendOutputEvent before waitUntilDeadline.
+     *  \param paFBId The FB's instance name ID. */
     void endMeasurement(TStringId paFBId);
+
+    /*! \brief Records a post-enforcement sample for a FB.
+     *  Stores the total duration including FET padding sleep as an ENFORCED
+     *  sample. On FET active and enforcement these values should cluster at the deadline.
+     *  Called from sendOutputEvent after waitUntilDeadline returns.
+     *  \param paFBId       The FB's instance name ID.
+     *  \param paEnforcedNs Total enforced duration in nanoseconds
+     *                      (algorithm time + FET sleep). */
+    void recordEnforcedSample(TStringId paFBId, long long paEnforcedNs);
 
     /*! \brief Get the stored duration samples (nanoseconds) for a FB.
      *
@@ -193,10 +203,20 @@ class CEETMonitor {
      */
     void exportAllCSV(const std::string &paDirectory) const;
 
+    /*! \brief Export duration data for all enforced FBs to individual CSV files.
+     *
+     * Creates one file per FB named <fbId>.csv inside paDirectory.
+     * The directory is created if it does not exist.
+     *
+     * \param paDirectory Output directory path.
+     */
+    void exportAllCSVEnforced(const std::string &paDirectory) const;
+
     /*! \brief Starts a background thread that periodically exports EET and enforced samples to CSV.
      *
      * Stops automatically when paTargetSamples is reached by all FBs,
-     * or when stopPeriodicExport() is called. Only active under FORTE_EET_EVALUATION.
+     * or when stopPeriodicExport() is called. Only active under FORTE_EET_MONITORING (TODO : Change to
+     * FORTE_EET_EVALUATION).
      *
      *  \param paDirectory          Output directory for raw EET samples (eet_results).
      *  \param paDirectoryEnforced  Output directory for enforced samples (eet_results_enforced).
@@ -230,7 +250,8 @@ class CEETMonitor {
      *
      * Capped at MAX_SAMPLES. Includes phase and deadline metadata per sample.
      */
-    std::map<TStringId, std::vector<Sample>> mSamples;
+    std::map<TStringId, std::vector<Sample>> mSamples; // WARMUP + FET_ACTIVE
+    std::map<TStringId, std::vector<Sample>> mSamplesEnforced; // ENFORCED
 
     /*! \brief Per-FB real-time (wall-clock) start timestamp for the measurement in progress.
      *  Set by startMeasurement(), erased by endMeasurement(). */

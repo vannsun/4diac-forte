@@ -93,6 +93,29 @@ void CEETMonitor::endMeasurement(TStringId paFBId) {
   }
 }
 
+void CEETMonitor::recordEnforcedSample(TStringId paFBId, long long paEnforcedNs) {
+  if (forte::eet::isMonitoringExcluded(paFBId))
+    return;
+  std::lock_guard<std::mutex> lock(mMutex);
+
+  auto fetIt = mFETActivated.find(paFBId);
+  const bool fetActive = (fetIt != mFETActivated.end() && fetIt->second.active);
+  const long long deadlineNs = fetActive ? fetIt->second.deadlineNs : 0;
+
+  Sample s;
+  s.durationNs = paEnforcedNs;
+  s.timestampNs = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+  s.deadlineNs = deadlineNs;
+  s.fetActive = fetActive;
+  s.deadlineMiss = fetActive && deadlineNs > 0 && paEnforcedNs > deadlineNs;
+  s.phase = ExecutionPhase::ENFORCED; // distinguishes from FET_ACTIVE set in endMeasurement()
+
+  auto &samples = mSamplesEnforced[paFBId];
+  if (samples.size() >= MAX_SAMPLES)
+    samples.erase(samples.begin());
+  samples.push_back(s);
+}
+
 std::vector<long long> CEETMonitor::getDurations(TStringId paFBId) const {
   return getDurationsCopy(paFBId);
 }
@@ -225,6 +248,28 @@ void CEETMonitor::exportAllCSV(const std::string &paDirectory) const {
   }
 }
 
+void CEETMonitor::exportAllCSVEnforced(const std::string &paDirectory) const {
+  std::map<TStringId, std::vector<Sample>> snapshot;
+  {
+    std::lock_guard<std::mutex> lock(mMutex);
+    snapshot = mSamplesEnforced;
+  }
+
+  std::filesystem::create_directories(paDirectory);
+  for (const auto &[fbId, samples] : snapshot) {
+    const std::string filename = paDirectory + "/" + std::string(fbId) + ".csv";
+    std::ofstream file(filename);
+    if (!file.is_open())
+      continue;
+    file << "timestamp_ns,execution_ns,deadline_ns,deadline_miss,fet_active,phase\n";
+    for (const auto &s : samples) {
+      file << s.timestampNs << "," << s.durationNs << "," << s.deadlineNs << "," << (s.deadlineMiss ? 1 : 0) << ","
+           << (s.fetActive ? 1 : 0) << "," << static_cast<int>(s.phase) << "\n";
+    }
+    DEVLOG_INFO("EETMonitor: exported %zu enforced samples for '%s'\n", samples.size(), fbId);
+  }
+}
+
 void CEETMonitor::startPeriodicExport(const std::string &paDirectory,
                                       const std::string &paDirectoryEnforced,
                                       std::chrono::seconds paInterval,
@@ -271,6 +316,7 @@ void CEETMonitor::startPeriodicExport(const std::string &paDirectory,
 
         if (allDone) {
           exportAllCSV(paDirectory);
+          exportAllCSVEnforced(paDirectoryEnforced);
           DEVLOG_INFO("EETMonitor: target of %zu samples reached - stopping.\n", paTargetSamples);
           mExportRunning = false;
           break;
@@ -280,6 +326,7 @@ void CEETMonitor::startPeriodicExport(const std::string &paDirectory,
       // ── Periodic safety-net export ───────────────────────────────────────
       if (now - lastExport >= paInterval) {
         exportAllCSV(paDirectory);
+        exportAllCSVEnforced(paDirectoryEnforced);
         lastExport = now;
       }
     }

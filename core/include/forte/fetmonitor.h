@@ -67,7 +67,7 @@ class CFETMonitor {
      * 
      * If elapsed > deadline: fires error callback, returns false.
      * 
-     * Returns enforced duration in ns (>= 0), or -1 on violation.
+     * Returns enforced duration in ns (> 0), (0) on FB not registered or no active session, or (-1) on deadline missed.
      * 
      * Returning -1 suppresses triggerEvent - output event is not fired.
      */
