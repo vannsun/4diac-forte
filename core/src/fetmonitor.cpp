@@ -46,12 +46,8 @@ static void preciseSleep(std::chrono::nanoseconds duration) {
   if (duration.count() <= 0)
     return;
 
-  // For durations > 1ms use Windows sleep with high resolution timer
-  timeBeginPeriod(1);
-
   const auto deadline = std::chrono::steady_clock::now() + duration;
 
-  // Sleep most of the duration
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
   if (ms > 1) {
     Sleep(static_cast<DWORD>(ms - 1));
@@ -61,8 +57,6 @@ static void preciseSleep(std::chrono::nanoseconds duration) {
   while (std::chrono::steady_clock::now() < deadline) {
     // spin
   }
-
-  timeBeginPeriod(1); // restore — actually should call timeEndPeriod
 }
 #else
 static void preciseSleep(std::chrono::nanoseconds duration) {

@@ -29,6 +29,11 @@ static void onSignal(int) {
 }
 #endif
 
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#endif
+
 namespace forte {
   C4diacFORTEInstance::~C4diacFORTEInstance() {
     if (mActiveDevice) {
@@ -39,9 +44,15 @@ namespace forte {
 #endif
       mActiveDevice->deinitialize();
     }
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
   }
 
   bool C4diacFORTEInstance::startupNewDevice(const std::string &paMGRID) {
+#ifdef _WIN32
+    timeBeginPeriod(1); // set once — reduces Windows timer resolution to 1ms
+#endif
     if (mActiveDevice) {
 #ifdef FORTE_EET_MONITORING
       // Stop the periodic export thread before tearing down the current

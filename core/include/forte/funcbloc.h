@@ -235,16 +235,17 @@ namespace forte {
             readInputData(paEIID);
             // Count Event for monitoring
             mEventMonitorCount[paEIID]++;
-          }
+
 #ifdef FORTE_EET_MONITORING
-          // EET: start timestamp for this execution.
-          const auto startTime = std::chrono::steady_clock::now();
-          CEETMonitor::getInstance().startMeasurementAt(getInstanceNameId().data(), startTime);
+            // EET: start timestamp for this execution.
+            const auto startTime = std::chrono::steady_clock::now();
+            CEETMonitor::getInstance().startMeasurementAt(getInstanceNameId().data(), startTime);
 #ifdef FORTE_FET_ENFORCEMENT
-          // FET: start countdown — silently ignored until EET activates it.
-          CFETMonitor::getInstance().startMeasurementAt(getInstanceNameId().data(), startTime);
+            // FET: start countdown — silently ignored until EET activates it.
+            CFETMonitor::getInstance().startMeasurementAt(getInstanceNameId().data(), startTime);
 #endif
 #endif
+          }
           executeEvent(paEIID, paExecEnv);
           if (mForces.any()) [[unlikely]] {
             resetForcedOutputs();
