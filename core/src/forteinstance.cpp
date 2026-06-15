@@ -16,15 +16,55 @@
 #include "forte/forteinstance.h"
 #include "forte/devicefactory.h"
 
+#ifdef FORTE_EET_MONITORING
+#include "forte/eetmonitor.h"
+#include <csignal>
+// Called on Ctrl+C or VSCode stop (SIGTERM/SIGINT).
+// Exports whatever samples exist at that moment.
+static void onSignal(int) {
+  CEETMonitor::getInstance().stopPeriodicExport();
+  CEETMonitor::getInstance().exportAllCSV("eet_results");
+  CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
+  std::exit(0);
+}
+#endif
+
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#endif
+
 namespace forte {
   C4diacFORTEInstance::~C4diacFORTEInstance() {
     if (mActiveDevice) {
+#ifdef FORTE_EET_MONITORING
+      CEETMonitor::getInstance().stopPeriodicExport();
+      CEETMonitor::getInstance().exportAllCSV("eet_results");
+      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
+#endif
       mActiveDevice->deinitialize();
     }
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
   }
 
   bool C4diacFORTEInstance::startupNewDevice(const std::string &paMGRID) {
+#ifdef _WIN32
+    timeBeginPeriod(1); // set once — reduces Windows timer resolution to 1ms
+#endif
     if (mActiveDevice) {
+#ifdef FORTE_EET_MONITORING
+      // Stop the periodic export thread before tearing down the current
+      // device. The export thread calls exportAllCSV which reads mSamples
+      // under its own lock. Called during device teardown.
+      CEETMonitor::getInstance().stopPeriodicExport();
+
+      // Flush whatever samples the last periodic export did not yet capture.
+      CEETMonitor::getInstance().exportAllCSV("eet_results");
+      CEETMonitor::getInstance().exportAllCSVEnforced("eet_results_enforced");
+#endif
+
       // we have a current active device stop it
       triggerDeviceShutdown();
       awaitDeviceShutdown();
@@ -34,6 +74,15 @@ namespace forte {
     if (mActiveDevice) {
       mActiveDevice->initialize();
       mActiveDevice->startDevice();
+
+      // TODO: Change flag for FORTE_EET_EVALUATION
+#ifdef FORTE_EET_MONITORING
+      std::signal(SIGINT, onSignal);
+      std::signal(SIGTERM, onSignal);
+      CEETMonitor::getInstance().startPeriodicExport("eet_results", "eet_results_enforced",
+                                                     std::chrono::seconds(30), // export every 30s as safety net
+                                                     10000); // stop when 4000 samples reached
+#endif
     }
     return mActiveDevice.operator bool();
   }

@@ -47,6 +47,8 @@ target_sources(forte-core PRIVATE
         fortelist.h
         fortenode.h
         funcbloc.cpp
+        eetmonitor.cpp
+        fetmonitor.cpp
         gatherdataconn.cpp
         gatherdataconn.h
         inoutdataconn.cpp
