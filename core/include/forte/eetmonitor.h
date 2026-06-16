@@ -82,6 +82,13 @@ class CEETMonitor {
       ENFORCED ///< Collected after waitUntilDeadline (includes FET sleep)
     };
 
+    /*! \brief Enforcement result. */
+    enum class EnforcementResult {
+      HARD_MISS = -1, ///< Deadline was already missed at enforcement attempt
+      NO_ENFORCEMENT = 0, ///< FET was not active for this sample.
+      ENFORCED = 1 ///< Enforcement completed successfully.
+    };
+
     /*! \brief Single EET measurement sample with metadata. */
     struct Sample {
         size_t sampleId{0}; ///< ID
@@ -94,6 +101,8 @@ class CEETMonitor {
         bool fetActive{false}; ///< True if FET was active when this sample was recorded
         bool deadlineMiss{false}; ///< True if durationNs exceeded deadlineNs
         ExecutionPhase phase{ExecutionPhase::WARMUP}; ///< Warmup, enforcement-active, or enforced (post-sleep)
+        EnforcementResult enforcementResult{
+            EnforcementResult::NO_ENFORCEMENT}; ///< Hard miss, no enforcement, or enforced
     };
 
     /*! \brief Start timing for a Function Block's execution.

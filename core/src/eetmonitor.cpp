@@ -119,6 +119,19 @@ void CEETMonitor::recordEnforcedSample(TStringId paFBId, long long paEnforcedNs,
   s.deadlineMiss = fetActive && deadlineNs > 0 && paEnforcedNs > deadlineNs;
   s.phase = ExecutionPhase::ENFORCED; // distinguishes from FET_ACTIVE set in endMeasurement()
 
+  if (paEnforcedNs < 0) {
+    s.enforcementResult = EnforcementResult::HARD_MISS;
+    s.deadlineMiss = true;
+    s.enforcedNs = 0;
+  } else if (paEnforcedNs == 0) {
+    s.enforcementResult = EnforcementResult::NO_ENFORCEMENT;
+    s.deadlineMiss = false;
+  } else {
+    s.enforcementResult = (fetActive && deadlineNs > 0 && paEnforcedNs > deadlineNs) ? EnforcementResult::HARD_MISS
+                                                                                     : EnforcementResult::ENFORCED;
+    s.deadlineMiss = (fetActive && deadlineNs > 0 && paEnforcedNs > deadlineNs);
+  }
+
   auto &samples = mSamplesEnforced[paFBId];
   if (samples.size() >= MAX_SAMPLES)
     samples.erase(samples.begin());
@@ -268,12 +281,12 @@ void CEETMonitor::exportAllCSV(const std::string &paDirectory) const {
     if (!file.is_open())
       continue;
 
-    file << "sample_id,timestamp_ns,raw_ns,enforced_ns,sleep_target_ns,deadline_ns,deadline_miss,fet_active,phase\n";
+    file << "sample_id,timestamp_ns,raw_ns,enforced_ns,sleep_target_ns,deadline_ns,deadline_miss,fet_active,enforcement_result,phase\n";
 
     for (const auto &s : samples) {
       file << s.sampleId << "," << s.timestampNs << "," << s.rawNs << "," << s.enforcedNs << "," << s.sleepTargetNs
            << "," << s.deadlineNs << "," << (s.deadlineMiss ? 1 : 0) << "," << (s.fetActive ? 1 : 0) << ","
-           << static_cast<int>(s.phase) << "\n";
+           << static_cast<int>(s.enforcementResult) << "," << static_cast<int>(s.phase) << "\n";
     }
     DEVLOG_INFO("EETMonitor: exported %zu samples for '%s'\n", samples.size(), fbId);
   }
@@ -292,12 +305,12 @@ void CEETMonitor::exportAllCSVEnforced(const std::string &paDirectory) const {
     std::ofstream file(filename);
     if (!file.is_open())
       continue;
-    file << "sample_id,timestamp_ns,raw_ns,enforced_ns,sleep_target_ns,deadline_ns,deadline_miss,fet_active,phase\n";
+    file << "sample_id,timestamp_ns,raw_ns,enforced_ns,sleep_target_ns,deadline_ns,deadline_miss,fet_active,enforcement_result,phase\n";
 
     for (const auto &s : samples) {
       file << s.sampleId << "," << s.timestampNs << "," << s.rawNs << "," << s.enforcedNs << "," << s.sleepTargetNs
            << "," << s.deadlineNs << "," << (s.deadlineMiss ? 1 : 0) << "," << (s.fetActive ? 1 : 0) << ","
-           << static_cast<int>(s.phase) << "\n";
+           << static_cast<int>(s.enforcementResult) << "," << static_cast<int>(s.phase) << "\n";
     }
     DEVLOG_INFO("EETMonitor: exported %zu enforced samples for '%s'\n", samples.size(), fbId);
   }

@@ -437,9 +437,8 @@ namespace forte {
 
           // #ifdef FORTE_EET_EVALUATION
           // Only record samples when enforcement actually happened.
-          if (enforcedNs > 0) {
-            CEETMonitor::getInstance().recordEnforcedSample(getInstanceNameId().data(), enforcedNs, rawNs, sampleId);
-          }
+          // Record all outcomes: hard deadline miss before enforcement (-1), no-wait (0), enforced (>0)
+          CEETMonitor::getInstance().recordEnforcedSample(getInstanceNameId().data(), enforcedNs, rawNs, sampleId);
           // #endif
 
           // Only suppress output on deadline missed.
