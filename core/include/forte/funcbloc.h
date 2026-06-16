@@ -435,12 +435,8 @@ namespace forte {
 #ifdef FORTE_FET_ENFORCEMENT
           const long long enforcedNs = CFETMonitor::getInstance().waitUntilDeadline(getInstanceNameId().data());
 
-          // #ifdef FORTE_EET_EVALUATION
-          // Only record samples when enforcement actually happened.
-          if (enforcedNs > 0) {
-            CEETMonitor::getInstance().recordEnforcedSample(getInstanceNameId().data(), enforcedNs, rawNs, sampleId);
-          }
-          // #endif
+          // Record all outcomes: hard deadline miss before enforcement (-1), no-wait (0), enforced (>0)
+          CEETMonitor::getInstance().recordEnforcedSample(getInstanceNameId().data(), enforcedNs, rawNs, sampleId);
 
           // Only suppress output on deadline missed.
           if (enforcedNs != -1) {
