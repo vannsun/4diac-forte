@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: EPL-2.0
  *
  * Contributors:
- *    Vannessa Cañon Pasquel - Initial implementation
+ *    Vannessa Cañon Pasquel - Dealine enforcement initial implementation
  *******************************************************************************/
 
 #include <filesystem>
