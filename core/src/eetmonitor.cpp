@@ -82,8 +82,8 @@ std::pair<long long, size_t> CEETMonitor::endMeasurement(TStringId paFBId) {
     s.phase = phase;
 
     auto &samples = mSamples[paFBId];
-    if (samples.size() >= MAX_SAMPLES)
-      samples.erase(samples.begin());
+    // if (samples.size() >= MAX_SAMPLES)
+    //   samples.erase(samples.begin());
     samples.push_back(s);
 
     if (!fetActive) {
@@ -133,8 +133,8 @@ void CEETMonitor::recordEnforcedSample(TStringId paFBId, long long paEnforcedNs,
   }
 
   auto &samples = mSamplesEnforced[paFBId];
-  if (samples.size() >= MAX_SAMPLES)
-    samples.erase(samples.begin());
+  // if (samples.size() >= MAX_SAMPLES)
+  //   samples.erase(samples.begin());
   samples.push_back(s);
 }
 
